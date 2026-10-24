@@ -55,6 +55,22 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(res["target"], [75.0, 45.0, 35.0])
                 self.assertEqual(list(self.sim.target_pos), [75.0, 45.0, 35.0])
 
+    async def test_static_frontend_serving(self):
+        """Verify serving static index.html and frontend assets."""
+        async with ClientSession() as session:
+            # Check root index.html
+            async with session.get(f"http://127.0.0.1:{self.port}/") as resp:
+                self.assertEqual(resp.status, 200)
+                html = await resp.text()
+                self.assertIn("SwarmTech3_UpRising", html)
+                self.assertIn("viewport-container", html)
+
+            # Check js/app.js
+            async with session.get(f"http://127.0.0.1:{self.port}/js/app.js") as resp:
+                self.assertEqual(resp.status, 200)
+                js = await resp.text()
+                self.assertIn("THREE.WebGLRenderer", js)
+
     async def test_websocket_telemetry_streaming(self):
         """Verify WebSocket client receives continuous 60 FPS state frames."""
         ws_url = f"http://127.0.0.1:{self.port}/ws"

@@ -10,8 +10,32 @@ import json
 import logging
 import os
 from pathlib import Path
+import sys
 import time
 from typing import Dict, List, Optional, Set, Any
+
+# Ensure repository root is on sys.path even when executed directly via file path
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# Self-healing Conda Windows DLL path bootstrap:
+if sys.platform == "win32":
+    _prefix = Path(sys.prefix)
+    _dll_candidates = [
+        _prefix / "Library" / "bin",
+        _prefix / "Scripts",
+        _prefix.parent.parent / "Library" / "bin",
+    ]
+    for _d in _dll_candidates:
+        if _d.exists():
+            _p_str = str(_d)
+            if _p_str not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = _p_str + os.pathsep + os.environ.get("PATH", "")
+            try:
+                os.add_dll_directory(_p_str)
+            except (AttributeError, OSError):
+                pass
 
 from aiohttp import web, WSMsgType
 
@@ -66,14 +90,16 @@ class SwarmWebServer:
         # Static GCS frontend routes
         self.app.router.add_get("/", self.index_handler)
 
-        if self.frontend_dir.exists():
-            # Mount static assets directory
-            self.app.router.add_static(
-                "/static",
-                path=str(self.frontend_dir),
-                name="static",
-                show_index=False,
-            )
+        # Ensure frontend directories exist
+        self.frontend_dir.mkdir(parents=True, exist_ok=True)
+        css_dir = self.frontend_dir / "css"
+        css_dir.mkdir(parents=True, exist_ok=True)
+        js_dir = self.frontend_dir / "js"
+        js_dir.mkdir(parents=True, exist_ok=True)
+
+        self.app.router.add_static("/static", path=str(self.frontend_dir), name="static", show_index=False)
+        self.app.router.add_static("/css", path=str(css_dir), name="css", show_index=False)
+        self.app.router.add_static("/js", path=str(js_dir), name="js", show_index=False)
 
     async def index_handler(self, request: web.Request) -> web.Response:
         """Serve index.html from frontend directory or a fallback status page."""
@@ -270,3 +296,26 @@ class SwarmWebServer:
         # Close network bridge if attached
         if self.bridge is not None:
             self.bridge.close()
+
+
+if __name__ == "__main__":
+    import sys
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    sim = SwarmSimulator(drone_count=8)
+    server = SwarmWebServer(sim=sim, host="127.0.0.1", port=8080)
+
+    async def main():
+        await server.start()
+        print("SwarmTech3 WebGL GCS running at http://127.0.0.1:8080", flush=True)
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+        finally:
+            await server.stop()
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

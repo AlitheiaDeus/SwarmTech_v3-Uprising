@@ -1,0 +1,151 @@
+/* ==============================================================================
+   SwarmTech3_UpRising: Tactical Cyberpunk GCS Stylesheet (style.css)
+   Palette: Dark Navy (#061019), Neon Cyan (#00F0FF), Emerald (#00FFAA),
+   Amber (#FFB800), Neon Red (#FF3366)
+   ============================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&display=swap');
+
+:root {
+  --bg-dark: #061019;
+  --bg-panel: rgba(6, 16, 25, 0.82);
+  --bg-panel-hover: rgba(10, 25, 38, 0.92);
+  --border-cyan: rgba(0, 240, 255, 0.3);
+  --border-cyan-glow: rgba(0, 240, 255, 0.6);
+  --neon-cyan: #00F0FF;
+  --neon-emerald: #00FFAA;
+  --neon-amber: #FFB800;
+  --neon-red: #FF3366;
+  --text-primary: #D4F4FF;
+  --text-muted: #5A7E96;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--bg-dark);
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  color: var(--text-primary);
+  position: relative;
+}
+
+/* 3D WebGL Viewport Container */
+#viewport-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+}
+
+#viewport-container canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Top Tactical Status Bar */
+#top-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 46px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-cyan);
+  backdrop-filter: blur(10px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  z-index: 10;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+}
+
+.brand-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-logo {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+  letter-spacing: 1.5px;
+}
+
+.brand-badge {
+  font-size: 10px;
+  background: rgba(0, 240, 255, 0.15);
+  border: 1px solid var(--neon-cyan);
+  padding: 2px 8px;
+  border-radius: 2px;
+  color: var(--neon-cyan);
+  font-weight: 600;
+}
+
+.status-section {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.status-pill strong {
+  color: var(--neon-cyan);
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--neon-emerald);
+  box-shadow: 0 0 8px var(--neon-emerald);
+}
+
+.status-indicator.disconnected {
+  background-color: var(--neon-red);
+  box-shadow: 0 0 8px var(--neon-red);
+}
+
+/* Camera Hint Overlay */
+#camera-hints {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(6, 16, 25, 0.7);
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 11px;
+  color: var(--text-muted);
+  backdrop-filter: blur(6px);
+  z-index: 10;
+  pointer-events: none;
+  display: flex;
+  gap: 16px;
+}
+
+#camera-hints span {
+  color: var(--neon-cyan);
+}
