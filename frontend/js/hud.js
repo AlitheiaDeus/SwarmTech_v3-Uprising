@@ -1,0 +1,422 @@
+/**
+ * SwarmTech3_UpRising: Cyberpunk Tactical HUD & Command Deck (hud.js)
+ * Handles telemetry cards, mission dispatch, formation switching,
+ * brain architecture hot-swapping, casualty lab controls, and event logging.
+ */
+
+(function () {
+    'use strict';
+
+    // State caching
+    const droneCards = new Map();
+    let currentLeaderId = null;
+    let currentFormation = null;
+    let currentBrain = null;
+    let tetherSevered = false;
+    const deadDroneIds = new Set();
+    const lostLinkIds = new Set();
+
+    // DOM Elements
+    let cardsContainer = null;
+    let eventLogList = null;
+    let inputX = null, inputY = null, inputZ = null;
+
+    function init() {
+        cardsContainer = document.getElementById('telemetry-cards');
+        eventLogList = document.getElementById('event-log-list');
+        inputX = document.getElementById('tgt-input-x');
+        inputY = document.getElementById('tgt-input-y');
+        inputZ = document.getElementById('tgt-input-z');
+
+        setupEventListeners();
+
+        if (window.swarmClient) {
+            window.swarmClient.on('telemetry', onTelemetry);
+            window.swarmClient.on('command_ack', onCommandAck);
+            window.swarmClient.on('status', onWsStatus);
+        }
+
+        logEvent('SYSTEM', 'Tactical HUD & Command Deck Initialized.');
+    }
+
+    // =========================================================================
+    // 1. UI Event Listeners & Command Dispatch
+    // =========================================================================
+    function setupEventListeners() {
+        // Brain Selectors
+        setupBtn('btn-brain-lf', () => dispatchBrain('LEADER_FOLLOWER'));
+        setupBtn('btn-brain-gossip', () => dispatchBrain('GOSSIP_CONSENSUS'));
+
+        // Formation Selectors
+        setupBtn('btn-form-echelon', () => dispatchFormation('ECHELON_ESCORT'));
+        setupBtn('btn-form-boids', () => dispatchFormation('NATURAL_FLOCK'));
+        setupBtn('btn-form-vortex', () => dispatchFormation('ORBIT_VORTEX'));
+        setupBtn('btn-form-patrol', () => dispatchFormation('PERIMETER_PATROL'));
+
+        // Preset Waypoints
+        setupBtn('btn-wp-alpha', () => dispatchTarget([60.0, 40.0, 30.0], 'ALPHA'));
+        setupBtn('btn-wp-bravo', () => dispatchTarget([-40.0, 70.0, 45.0], 'BRAVO'));
+        setupBtn('btn-wp-charlie', () => dispatchTarget([50.0, -50.0, 25.0], 'CHARLIE'));
+        setupBtn('btn-wp-rtb', () => dispatchTarget([0.0, 0.0, 20.0], 'RTB_BASE'));
+
+        // Custom Target Coordinates
+        const btnDispatchCustom = document.getElementById('btn-dispatch-custom');
+        if (btnDispatchCustom) {
+            btnDispatchCustom.addEventListener('click', () => {
+                const x = parseFloat(inputX?.value || 0);
+                const y = parseFloat(inputY?.value || 0);
+                const z = parseFloat(inputZ?.value || 25);
+                dispatchTarget([x, y, z], 'CUSTOM_COORD');
+            });
+        }
+
+        // Casualty Lab Controls
+        setupBtn('btn-kill-leader', () => {
+            logEvent('CMD', 'Injecting casualty: KILL_LEADER');
+            window.swarmClient?.send({ cmd: 'KILL_LEADER' });
+        });
+
+        setupBtn('btn-cut-tether', () => {
+            logEvent('CMD', 'Injecting physical casualty: CUT_TETHER');
+            window.swarmClient?.send({ cmd: 'CUT_TETHER' });
+        });
+
+        setupBtn('btn-kill-random', () => {
+            const aliveFollowers = [];
+            for (let [id, card] of droneCards) {
+                if (!deadDroneIds.has(id) && id !== currentLeaderId) {
+                    aliveFollowers.push(id);
+                }
+            }
+            if (aliveFollowers.length > 0) {
+                const victimId = aliveFollowers[Math.floor(Math.random() * aliveFollowers.length)];
+                logEvent('CMD', `Injecting escort casualty: KILL_DRONE #${victimId}`);
+                window.swarmClient?.send({ cmd: 'KILL_DRONE', id: victimId });
+            } else {
+                logEvent('WARN', 'No living escort followers available to terminate.');
+            }
+        });
+
+        setupBtn('btn-reboot-fleet', () => {
+            logEvent('CMD', 'Executing tactical swarm reboot: REBOOT_FLEET');
+            window.swarmClient?.send({ cmd: 'REBOOT_FLEET' });
+        });
+
+        // Panel Toggle Buttons
+        const leftToggle = document.getElementById('toggle-left-panel');
+        if (leftToggle) {
+            leftToggle.addEventListener('click', () => {
+                const p = document.getElementById('left-panel');
+                p?.classList.toggle('collapsed');
+            });
+        }
+
+        const rightToggle = document.getElementById('toggle-right-panel');
+        if (rightToggle) {
+            rightToggle.addEventListener('click', () => {
+                const p = document.getElementById('right-panel');
+                p?.classList.toggle('collapsed');
+            });
+        }
+    }
+
+    function setupBtn(id, handler) {
+        const btn = document.getElementById(id);
+        if (btn) {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                handler();
+            });
+        }
+    }
+
+    function dispatchBrain(brainName) {
+        logEvent('CMD', `Hot-swapping Brain Architecture -> ${brainName}`);
+        window.swarmClient?.send({ cmd: 'SET_BRAIN', brain: brainName });
+    }
+
+    function dispatchFormation(modeName) {
+        logEvent('CMD', `Changing Swarm Formation -> ${modeName}`);
+        window.swarmClient?.send({ cmd: 'SET_FORMATION', mode: modeName });
+    }
+
+    function dispatchTarget(pos, label) {
+        logEvent('CMD', `Dispatching Target [${label}] -> (${pos[0]}, ${pos[1]}, ${pos[2]})`);
+        window.swarmClient?.send({ cmd: 'SET_TARGET', pos: pos });
+        if (inputX) inputX.value = pos[0];
+        if (inputY) inputY.value = pos[1];
+        if (inputZ) inputZ.value = pos[2];
+    }
+
+    // =========================================================================
+    // 2. Telemetry Ingestion & Real-Time Card Updates
+    // =========================================================================
+    function onTelemetry(frame) {
+        if (!frame) return;
+
+        // 1. Update Brain selection highlighting
+        if (frame.brain && frame.brain !== currentBrain) {
+            currentBrain = frame.brain;
+            updateBrainButtons(currentBrain);
+        }
+
+        // 2. Update Formation selection highlighting
+        if (frame.formation && frame.formation !== currentFormation) {
+            currentFormation = frame.formation;
+            updateFormationButtons(currentFormation);
+        }
+
+        // 3. Monitor Tether Severance
+        if (frame.tether) {
+            if (frame.tether.severed && !tetherSevered) {
+                tetherSevered = true;
+                logEvent('ALERT', 'Physical Tether Severed! Primary power cut.');
+            } else if (!frame.tether.severed && tetherSevered) {
+                tetherSevered = false;
+                logEvent('STATUS', 'Tether re-anchored to GCS mast.');
+            }
+        }
+
+        // 4. Update Target coordinate inputs if empty
+        if (frame.target && inputX && !inputX.matches(':focus')) {
+            inputX.value = frame.target[0];
+            inputY.value = frame.target[1];
+            inputZ.value = frame.target[2];
+        }
+
+        // 5. Update Drone Telemetry Cards
+        if (Array.isArray(frame.drones) && cardsContainer) {
+            let leaderFound = null;
+
+            frame.drones.forEach(d => {
+                if (d.is_leader && !d.crashed) {
+                    leaderFound = d.id;
+                }
+
+                // Detect Autonomic Events & State Changes
+                if (d.crashed && !deadDroneIds.has(d.id)) {
+                    deadDroneIds.add(d.id);
+                    logEvent('CASUALTY', `Drone #${d.id} crashed! Ballistic drop initiated.`);
+                } else if (!d.crashed && deadDroneIds.has(d.id)) {
+                    deadDroneIds.delete(d.id);
+                    logEvent('STATUS', `Drone #${d.id} rebooted and active.`);
+                }
+
+                if (d.lost_link && !lostLinkIds.has(d.id)) {
+                    lostLinkIds.add(d.id);
+                    logEvent('WARN', `Drone #${d.id} LOST LINK! Seeking LKP (${d.lkp[0]}, ${d.lkp[1]}, ${d.lkp[2]}).`);
+                } else if (!d.lost_link && lostLinkIds.has(d.id)) {
+                    lostLinkIds.delete(d.id);
+                    logEvent('STATUS', `Drone #${d.id} link restored. Rejoined swarm.`);
+                }
+
+                // Update / Build Card DOM
+                updateOrCreateDroneCard(d);
+            });
+
+            // Detect Autonomic Succession
+            if (leaderFound !== null && currentLeaderId !== null && leaderFound !== currentLeaderId) {
+                logEvent('SUCCESSION', `Autonomic Succession: Drone #${leaderFound} promoted to Swarm Leader!`);
+            }
+            currentLeaderId = leaderFound;
+        }
+    }
+
+    function updateOrCreateDroneCard(drone) {
+        let card = droneCards.get(drone.id);
+
+        if (!card) {
+            card = createCardElement(drone);
+            cardsContainer.appendChild(card.el);
+            droneCards.set(drone.id, card);
+        }
+
+        // Update In-Place for High-FPS smoothness
+        const speed = Math.hypot(drone.vel[0], drone.vel[1], drone.vel[2]).toFixed(1);
+        const alt = drone.pos[2].toFixed(1);
+
+        card.elAlt.textContent = `${alt}m`;
+        card.elVel.textContent = `${speed}m/s`;
+        card.elBat.textContent = `${drone.battery.toFixed(0)}%`;
+        card.elBatBar.style.width = `${Math.max(0, Math.min(100, drone.battery))}%`;
+
+        // Status Styling & Badges
+        card.el.classList.remove('leader-card', 'crashed-card', 'lkp-card', 'gossip-card');
+        card.elRole.className = 'drone-role-badge';
+
+        if (drone.crashed) {
+            card.el.classList.add('crashed-card');
+            card.elStatus.textContent = 'CRASHED';
+            card.elStatus.className = 'status-tag tag-crashed';
+            card.elRole.textContent = 'DESTROYED';
+            card.elActionBtn.textContent = 'REBOOT';
+            card.elActionBtn.className = 'card-btn-action btn-reboot';
+        } else if (drone.is_leader) {
+            card.el.classList.add('leader-card');
+            card.elStatus.textContent = 'LEADER';
+            card.elStatus.className = 'status-tag tag-leader';
+            card.elRole.textContent = 'FLAGSHIP';
+            card.elActionBtn.textContent = 'KILL';
+            card.elActionBtn.className = 'card-btn-action btn-kill';
+        } else if (drone.lost_link) {
+            card.el.classList.add('lkp-card');
+            card.elStatus.textContent = 'LKP RECOVERY';
+            card.elStatus.className = 'status-tag tag-lkp';
+            card.elRole.textContent = `TIER-${drone.tier}`;
+            card.elActionBtn.textContent = 'KILL';
+            card.elActionBtn.className = 'card-btn-action btn-kill';
+        } else if (drone.status === 'PROPAGATING') {
+            card.el.classList.add('gossip-card');
+            card.elStatus.textContent = 'ECHO WAVE';
+            card.elStatus.className = 'status-tag tag-gossip';
+            card.elRole.textContent = `TIER-${drone.tier}`;
+            card.elActionBtn.textContent = 'KILL';
+            card.elActionBtn.className = 'card-btn-action btn-kill';
+        } else {
+            card.elStatus.textContent = 'ACTIVE';
+            card.elStatus.className = 'status-tag tag-active';
+            card.elRole.textContent = `TIER-${drone.tier}`;
+            card.elActionBtn.textContent = 'KILL';
+            card.elActionBtn.className = 'card-btn-action btn-kill';
+        }
+    }
+
+    function createCardElement(drone) {
+        const el = document.createElement('div');
+        el.className = 'drone-telemetry-card';
+        el.id = `card-drone-${drone.id}`;
+
+        el.innerHTML = `
+            <div class="card-header">
+                <div class="card-id-group">
+                    <span class="drone-dot"></span>
+                    <strong class="drone-id-label">DRONE #${drone.id}</strong>
+                    <span class="drone-role-badge">TIER-${drone.tier}</span>
+                </div>
+                <span class="status-tag tag-active">ACTIVE</span>
+            </div>
+            <div class="card-metrics">
+                <div class="metric-col">
+                    <span class="metric-label">ALT</span>
+                    <strong class="metric-val metric-alt">0.0m</strong>
+                </div>
+                <div class="metric-col">
+                    <span class="metric-label">SPEED</span>
+                    <strong class="metric-val metric-vel">0.0m/s</strong>
+                </div>
+                <div class="metric-col">
+                    <span class="metric-label">BATTERY</span>
+                    <strong class="metric-val metric-bat">100%</strong>
+                </div>
+            </div>
+            <div class="card-battery-progress">
+                <div class="card-battery-fill" style="width: 100%;"></div>
+            </div>
+            <div class="card-footer">
+                <button class="card-btn-action btn-kill">KILL</button>
+            </div>
+        `;
+
+        const actionBtn = el.querySelector('.card-btn-action');
+        actionBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (deadDroneIds.has(drone.id)) {
+                logEvent('CMD', `Rebooting drone #${drone.id}`);
+                window.swarmClient?.send({ cmd: 'REBOOT_DRONE', id: drone.id });
+            } else {
+                logEvent('CMD', `Terminating drone #${drone.id}`);
+                window.swarmClient?.send({ cmd: 'KILL_DRONE', id: drone.id });
+            }
+        });
+
+        return {
+            el: el,
+            elAlt: el.querySelector('.metric-alt'),
+            elVel: el.querySelector('.metric-vel'),
+            elBat: el.querySelector('.metric-bat'),
+            elBatBar: el.querySelector('.card-battery-fill'),
+            elStatus: el.querySelector('.status-tag'),
+            elRole: el.querySelector('.drone-role-badge'),
+            elActionBtn: actionBtn,
+        };
+    }
+
+    // =========================================================================
+    // 3. Selection Highlighting
+    // =========================================================================
+    function updateBrainButtons(activeBrain) {
+        const lfBtn = document.getElementById('btn-brain-lf');
+        const gossipBtn = document.getElementById('btn-brain-gossip');
+
+        if (activeBrain === 'LEADER_FOLLOWER') {
+            lfBtn?.classList.add('active-selection');
+            gossipBtn?.classList.remove('active-selection');
+        } else if (activeBrain === 'GOSSIP_CONSENSUS') {
+            gossipBtn?.classList.add('active-selection');
+            lfBtn?.classList.remove('active-selection');
+        }
+    }
+
+    function updateFormationButtons(activeFormation) {
+        const map = {
+            'ECHELON_ESCORT': 'btn-form-echelon',
+            'NATURAL_FLOCK': 'btn-form-boids',
+            'ORBIT_VORTEX': 'btn-form-vortex',
+            'PERIMETER_PATROL': 'btn-form-patrol',
+        };
+
+        for (let [mode, btnId] of Object.entries(map)) {
+            const btn = document.getElementById(btnId);
+            if (btn) {
+                if (mode === activeFormation) {
+                    btn.classList.add('active-selection');
+                } else {
+                    btn.classList.remove('active-selection');
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // 4. Tactical Event Logging Feed
+    // =========================================================================
+    function logEvent(type, message) {
+        if (!eventLogList) return;
+
+        const timeStr = new Date().toTimeString().split(' ')[0];
+        const item = document.createElement('li');
+        item.className = `event-item type-${type.toLowerCase()}`;
+        item.innerHTML = `<span class="event-time">[${timeStr}]</span> <span class="event-type">[${type}]</span> <span class="event-msg">${message}</span>`;
+
+        eventLogList.appendChild(item);
+
+        // Keep maximum 30 log lines
+        while (eventLogList.children.length > 30) {
+            eventLogList.removeChild(eventLogList.firstChild);
+        }
+
+        // Auto-scroll to latest
+        eventLogList.scrollTop = eventLogList.scrollHeight;
+    }
+
+    function onCommandAck(ack) {
+        if (ack && ack.cmd) {
+            logEvent('ACK', `Command ${ack.cmd} acknowledged: ${JSON.stringify(ack)}`);
+        }
+    }
+
+    function onWsStatus(connected) {
+        if (connected) {
+            logEvent('NET', 'Duplex WebSocket link operational (60 FPS telemetry stream).');
+        } else {
+            logEvent('NET', 'WebSocket disconnected. Entering reconnection loop...');
+        }
+    }
+
+    // Export logger for global access (e.g. from app.js)
+    window.tacticalHud = {
+        logEvent: logEvent,
+    };
+
+    window.addEventListener('DOMContentLoaded', init);
+})();

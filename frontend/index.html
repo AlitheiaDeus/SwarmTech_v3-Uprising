@@ -51,6 +51,96 @@
   <!-- 3D WebGL Canvas Viewport -->
   <main id="viewport-container"></main>
 
+  <!-- Left Tactical Panel: Real-Time Fleet Telemetry Cards -->
+  <aside id="left-panel" class="tactical-panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <span class="panel-icon">&#x25C8;</span> FLEET TELEMETRY
+      </div>
+      <button id="toggle-left-panel" class="panel-collapse-btn" title="Toggle Panel">&#x25C4;</button>
+    </div>
+    <div id="telemetry-cards" class="panel-content scrollable">
+      <!-- Drone cards dynamically populated and updated in-place by hud.js -->
+    </div>
+  </aside>
+
+  <!-- Right Tactical Panel: Mission Command Deck -->
+  <aside id="right-panel" class="tactical-panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <span class="panel-icon">&#x2699;</span> COMMAND DECK
+      </div>
+      <button id="toggle-right-panel" class="panel-collapse-btn" title="Toggle Panel">&#x25BA;</button>
+    </div>
+    <div id="command-deck" class="panel-content scrollable">
+
+      <!-- Section: Pluggable Brain -->
+      <div class="control-group">
+        <div class="group-title">GUIDANCE BRAIN</div>
+        <div class="btn-grid-2">
+          <button id="btn-brain-lf" class="tactical-btn active-selection">LEADER-FOLLOWER</button>
+          <button id="btn-brain-gossip" class="tactical-btn">GOSSIP CONSENSUS</button>
+        </div>
+      </div>
+
+      <!-- Section: Flight Formation -->
+      <div class="control-group">
+        <div class="group-title">SWARM FORMATION</div>
+        <div class="btn-grid-2">
+          <button id="btn-form-echelon" class="tactical-btn active-selection">ECHELON</button>
+          <button id="btn-form-boids" class="tactical-btn">NATURAL BOIDS</button>
+          <button id="btn-form-vortex" class="tactical-btn">ORBIT VORTEX</button>
+          <button id="btn-form-patrol" class="tactical-btn">PERIMETER</button>
+        </div>
+      </div>
+
+      <!-- Section: Target Waypoints & Dispatch -->
+      <div class="control-group">
+        <div class="group-title">MISSION DISPATCH</div>
+        <div class="btn-grid-2">
+          <button id="btn-wp-alpha" class="tactical-btn preset-btn">ALPHA [60, 40, 30]</button>
+          <button id="btn-wp-bravo" class="tactical-btn preset-btn">BRAVO [-40, 70, 45]</button>
+          <button id="btn-wp-charlie" class="tactical-btn preset-btn">CHARLIE [50, -50, 25]</button>
+          <button id="btn-wp-rtb" class="tactical-btn preset-btn">RTB BASE [0, 0, 20]</button>
+        </div>
+        
+        <div class="coord-input-row">
+          <input type="number" id="tgt-input-x" class="tactical-input" placeholder="X" value="60" step="5">
+          <input type="number" id="tgt-input-y" class="tactical-input" placeholder="Y" value="40" step="5">
+          <input type="number" id="tgt-input-z" class="tactical-input" placeholder="Z" value="30" step="5">
+          <button id="btn-dispatch-custom" class="tactical-btn btn-send">SEND</button>
+        </div>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="chk-click-target" checked>
+          <span>CLICK GROUND GRID TO DISPATCH</span>
+        </label>
+      </div>
+
+      <!-- Section: Casualty Lab Controls -->
+      <div class="control-group danger-group">
+        <div class="group-title danger-title">&#x26A0; CASUALTY SIMULATION LAB</div>
+        <div class="btn-grid-2">
+          <button id="btn-kill-leader" class="tactical-btn btn-danger">&#x26A1; KILL LEADER</button>
+          <button id="btn-cut-tether" class="tactical-btn btn-danger">&#x2702; CUT TETHER</button>
+          <button id="btn-kill-random" class="tactical-btn btn-danger">&#x25BD; KILL ESCORT</button>
+          <button id="btn-reboot-fleet" class="tactical-btn btn-success">&#x21BB; REBOOT ALL</button>
+        </div>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- Bottom Event Log Feed -->
+  <section id="event-feed-panel">
+    <div class="event-feed-header">
+      <span class="feed-icon">&#x25C7;</span> TACTICAL TELEMETRY EVENT LOG
+    </div>
+    <ul id="event-log-list" class="scrollable">
+      <!-- Log lines dynamically injected -->
+    </ul>
+  </section>
+
   <!-- Camera Controls Hint -->
   <div id="camera-hints">
     <div><span>[L-DRAG]</span> ORBIT</div>
@@ -60,8 +150,9 @@
     <div><span>[R]</span> RESET CAM</div>
   </div>
 
-  <!-- Telemetry Client & Three.js Viewport App -->
+  <!-- Telemetry Client, Three.js Viewport App & Tactical HUD -->
   <script src="js/ws_client.js"></script>
   <script src="js/app.js"></script>
+  <script src="js/hud.js"></script>
 </body>
 </html>

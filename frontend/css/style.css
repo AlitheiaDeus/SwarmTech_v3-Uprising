@@ -149,3 +149,529 @@ html, body {
 #camera-hints span {
   color: var(--neon-cyan);
 }
+
+/* ==============================================================================
+   Tactical Glassmorphic Panels (Left & Right)
+   ============================================================================== */
+.tactical-panel {
+  position: absolute;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-cyan);
+  border-radius: 4px;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6), inset 0 0 12px rgba(0, 240, 255, 0.05);
+  display: flex;
+  flex-direction: column;
+  z-index: 20;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
+}
+
+#left-panel {
+  top: 56px;
+  left: 14px;
+  bottom: 175px;
+  width: 320px;
+}
+
+#left-panel.collapsed {
+  transform: translateX(-340px);
+}
+
+#right-panel {
+  top: 56px;
+  right: 14px;
+  bottom: 20px;
+  width: 340px;
+}
+
+#right-panel.collapsed {
+  transform: translateX(360px);
+}
+
+.panel-header {
+  height: 38px;
+  background: rgba(0, 240, 255, 0.08);
+  border-bottom: 1px solid var(--border-cyan);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+}
+
+.panel-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--neon-cyan);
+  letter-spacing: 1px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.panel-icon {
+  font-size: 12px;
+}
+
+.panel-collapse-btn {
+  background: transparent;
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  color: var(--neon-cyan);
+  width: 22px;
+  height: 22px;
+  border-radius: 2px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  transition: all 0.15s ease;
+}
+
+.panel-collapse-btn:hover {
+  background: rgba(0, 240, 255, 0.2);
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.4);
+}
+
+.panel-content {
+  flex: 1;
+  padding: 12px;
+  overflow-y: auto;
+}
+
+/* Custom Tactical Scrollbars */
+.scrollable::-webkit-scrollbar {
+  width: 4px;
+}
+
+.scrollable::-webkit-scrollbar-track {
+  background: rgba(6, 16, 25, 0.5);
+}
+
+.scrollable::-webkit-scrollbar-thumb {
+  background: rgba(0, 240, 255, 0.3);
+  border-radius: 2px;
+}
+
+.scrollable::-webkit-scrollbar-thumb:hover {
+  background: var(--neon-cyan);
+}
+
+/* ==============================================================================
+   Drone Telemetry Cards (Left Panel)
+   ============================================================================== */
+.drone-telemetry-card {
+  background: rgba(10, 25, 38, 0.6);
+  border: 1px solid rgba(0, 240, 255, 0.18);
+  border-radius: 3px;
+  padding: 10px;
+  margin-bottom: 8px;
+  transition: all 0.2s ease;
+}
+
+.drone-telemetry-card:hover {
+  border-color: var(--border-cyan-glow);
+  background: rgba(12, 32, 48, 0.85);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.15);
+}
+
+.drone-telemetry-card.leader-card {
+  border-color: rgba(255, 184, 0, 0.5);
+  background: rgba(255, 184, 0, 0.06);
+}
+
+.drone-telemetry-card.crashed-card {
+  border-color: rgba(255, 51, 102, 0.6);
+  background: rgba(255, 51, 102, 0.08);
+  opacity: 0.75;
+}
+
+.drone-telemetry-card.lkp-card {
+  border-color: rgba(255, 184, 0, 0.7);
+  animation: pulse-border 1.5s infinite;
+}
+
+.drone-telemetry-card.gossip-card {
+  border-color: rgba(0, 255, 170, 0.6);
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: rgba(255, 184, 0, 0.4); }
+  50% { border-color: rgba(255, 184, 0, 1.0); }
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.card-id-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drone-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--neon-cyan);
+  box-shadow: 0 0 6px var(--neon-cyan);
+}
+
+.leader-card .drone-dot {
+  background: var(--neon-amber);
+  box-shadow: 0 0 6px var(--neon-amber);
+}
+
+.crashed-card .drone-dot {
+  background: var(--neon-red);
+  box-shadow: 0 0 6px var(--neon-red);
+}
+
+.drone-id-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.5px;
+}
+
+.drone-role-badge {
+  font-size: 9px;
+  color: var(--text-muted);
+  background: rgba(0, 240, 255, 0.08);
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.status-tag {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 2px;
+  letter-spacing: 0.5px;
+}
+
+.tag-active {
+  color: var(--neon-emerald);
+  background: rgba(0, 255, 170, 0.12);
+  border: 1px solid rgba(0, 255, 170, 0.4);
+}
+
+.tag-leader {
+  color: var(--neon-amber);
+  background: rgba(255, 184, 0, 0.15);
+  border: 1px solid rgba(255, 184, 0, 0.5);
+}
+
+.tag-lkp {
+  color: var(--neon-amber);
+  background: rgba(255, 184, 0, 0.2);
+  border: 1px solid var(--neon-amber);
+}
+
+.tag-gossip {
+  color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.15);
+  border: 1px solid var(--neon-cyan);
+}
+
+.tag-crashed {
+  color: var(--neon-red);
+  background: rgba(255, 51, 102, 0.15);
+  border: 1px solid rgba(255, 51, 102, 0.5);
+}
+
+.card-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.metric-col {
+  display: flex;
+  flex-direction: column;
+}
+
+.metric-label {
+  font-size: 8px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.metric-val {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--neon-cyan);
+}
+
+.card-battery-progress {
+  width: 100%;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.card-battery-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--neon-emerald), var(--neon-cyan));
+  transition: width 0.3s ease;
+}
+
+.card-footer {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.card-btn-action {
+  font-family: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+  background: transparent;
+  transition: all 0.15s ease;
+}
+
+.btn-kill {
+  border: 1px solid rgba(255, 51, 102, 0.4);
+  color: var(--neon-red);
+}
+
+.btn-kill:hover {
+  background: rgba(255, 51, 102, 0.2);
+  box-shadow: 0 0 6px var(--neon-red);
+}
+
+.btn-reboot {
+  border: 1px solid rgba(0, 255, 170, 0.4);
+  color: var(--neon-emerald);
+}
+
+.btn-reboot:hover {
+  background: rgba(0, 255, 170, 0.2);
+  box-shadow: 0 0 6px var(--neon-emerald);
+}
+
+/* ==============================================================================
+   Mission Command Deck (Right Panel)
+   ============================================================================== */
+.control-group {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(0, 240, 255, 0.12);
+}
+
+.group-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--neon-cyan);
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+}
+
+.btn-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.tactical-btn {
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  padding: 7px 8px;
+  background: rgba(6, 16, 25, 0.8);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  color: var(--text-primary);
+  border-radius: 2px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.18s ease;
+}
+
+.tactical-btn:hover {
+  background: rgba(0, 240, 255, 0.15);
+  border-color: var(--neon-cyan);
+  color: #FFFFFF;
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+}
+
+.tactical-btn.active-selection {
+  background: rgba(0, 240, 255, 0.28);
+  border-color: var(--neon-cyan);
+  color: #FFFFFF;
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.5);
+  font-weight: 700;
+}
+
+.preset-btn {
+  font-size: 9px;
+  padding: 6px 4px;
+}
+
+.coord-input-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tactical-input {
+  flex: 1;
+  background: rgba(6, 16, 25, 0.9);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  color: var(--neon-cyan);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 5px 6px;
+  border-radius: 2px;
+  outline: none;
+  width: 45px;
+}
+
+.tactical-input:focus {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.4);
+}
+
+.btn-send {
+  flex: 1.2;
+  font-weight: 700;
+  border-color: var(--neon-emerald);
+  color: var(--neon-emerald);
+}
+
+.btn-send:hover {
+  background: rgba(0, 255, 170, 0.2);
+  box-shadow: 0 0 8px var(--neon-emerald);
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 8px;
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  accent-color: var(--neon-cyan);
+  cursor: pointer;
+}
+
+.danger-group {
+  border-bottom: none;
+  background: rgba(255, 51, 102, 0.04);
+  padding: 10px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 51, 102, 0.2);
+}
+
+.danger-title {
+  color: var(--neon-red);
+}
+
+.btn-danger {
+  border-color: rgba(255, 51, 102, 0.4);
+  color: var(--neon-red);
+}
+
+.btn-danger:hover {
+  background: rgba(255, 51, 102, 0.25);
+  border-color: var(--neon-red);
+  box-shadow: 0 0 10px rgba(255, 51, 102, 0.5);
+}
+
+.btn-success {
+  border-color: rgba(0, 255, 170, 0.4);
+  color: var(--neon-emerald);
+}
+
+.btn-success:hover {
+  background: rgba(0, 255, 170, 0.2);
+  border-color: var(--neon-emerald);
+  box-shadow: 0 0 10px rgba(0, 255, 170, 0.5);
+}
+
+/* ==============================================================================
+   Bottom Tactical Telemetry Event Feed
+   ============================================================================== */
+#event-feed-panel {
+  position: absolute;
+  bottom: 16px;
+  left: 14px;
+  width: 320px;
+  height: 145px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-cyan);
+  border-radius: 4px;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  z-index: 20;
+}
+
+.event-feed-header {
+  height: 28px;
+  background: rgba(0, 240, 255, 0.06);
+  border-bottom: 1px solid var(--border-cyan);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--neon-cyan);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  letter-spacing: 0.8px;
+  gap: 6px;
+}
+
+#event-log-list {
+  flex: 1;
+  padding: 8px 10px;
+  overflow-y: auto;
+  list-style: none;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.event-item {
+  margin-bottom: 4px;
+  display: flex;
+  gap: 6px;
+  word-break: break-all;
+}
+
+.event-time {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.event-type {
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.type-system .event-type { color: var(--neon-cyan); }
+.type-cmd .event-type { color: var(--neon-emerald); }
+.type-ack .event-type { color: #A0E0FF; }
+.type-alert .event-type { color: var(--neon-red); }
+.type-casualty .event-type { color: var(--neon-red); font-weight: 800; }
+.type-warn .event-type { color: var(--neon-amber); }
+.type-status .event-type { color: var(--neon-emerald); }
+.type-succession .event-type { color: var(--neon-amber); font-weight: 800; }
+.type-dispatch .event-type { color: var(--neon-emerald); }
+.type-net .event-type { color: var(--neon-cyan); }
+
+.event-msg {
+  color: var(--text-primary);
+}

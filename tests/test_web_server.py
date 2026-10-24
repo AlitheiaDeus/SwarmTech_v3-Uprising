@@ -64,12 +64,21 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 html = await resp.text()
                 self.assertIn("SwarmTech3_UpRising", html)
                 self.assertIn("viewport-container", html)
+                self.assertIn("left-panel", html)
+                self.assertIn("right-panel", html)
+                self.assertIn("event-feed-panel", html)
 
             # Check js/app.js
             async with session.get(f"http://127.0.0.1:{self.port}/js/app.js") as resp:
                 self.assertEqual(resp.status, 200)
                 js = await resp.text()
                 self.assertIn("THREE.WebGLRenderer", js)
+
+            # Check js/hud.js
+            async with session.get(f"http://127.0.0.1:{self.port}/js/hud.js") as resp:
+                self.assertEqual(resp.status, 200)
+                hud_js = await resp.text()
+                self.assertIn("tacticalHud", hud_js)
 
     async def test_websocket_telemetry_streaming(self):
         """Verify WebSocket client receives continuous 60 FPS state frames."""

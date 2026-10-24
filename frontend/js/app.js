@@ -101,6 +101,8 @@
         // 7. Event Listeners
         window.addEventListener('resize', onWindowResize);
         window.addEventListener('keydown', onKeyDown);
+        renderer.domElement.addEventListener('pointerdown', onPointerDown);
+        renderer.domElement.addEventListener('pointerup', onPointerUp);
 
         // 8. Connect WebSocket Telemetry
         if (window.swarmClient) {
@@ -592,7 +594,8 @@
             }
         }
 
-        // 4. Update Orbit Controls & Render WebGL Scene
+        // 4. Update Click Ripples & Orbit Controls & Render
+        updateRipples();
         controls.update();
         renderer.render(scene, camera);
 
@@ -610,8 +613,86 @@
     }
 
     // =========================================================================
-    // 6. User Interaction & Window Controls
+    // 6. User Interaction, Ground Click Dispatch & Window Controls
     // =========================================================================
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+    const clickRaycaster = new THREE.Raycaster();
+    const clickPoint = new THREE.Vector3();
+    let pointerDownX = 0, pointerDownY = 0;
+    const activeRipples = [];
+
+    function onPointerDown(e) {
+        pointerDownX = e.clientX;
+        pointerDownY = e.clientY;
+    }
+
+    function onPointerUp(e) {
+        const dist = Math.hypot(e.clientX - pointerDownX, e.clientY - pointerDownY);
+        // Only trigger on clean click without significant drag (< 6px) and left button
+        if (dist < 6 && e.button === 0) {
+            const chk = document.getElementById('chk-click-target');
+            if (chk && !chk.checked) return;
+
+            const rect = renderer.domElement.getBoundingClientRect();
+            const mouseX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            const mouseY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+            clickRaycaster.setFromCamera(new THREE.Vector2(mouseX, mouseY), camera);
+            if (clickRaycaster.ray.intersectPlane(groundPlane, clickPoint)) {
+                const targetX = Math.round(Math.max(-140, Math.min(140, clickPoint.x)));
+                const targetY = Math.round(Math.max(-140, Math.min(140, clickPoint.y)));
+                const targetZ = 30.0;
+
+                spawnClickRipple(targetX, targetY);
+
+                if (window.swarmClient) {
+                    window.swarmClient.send({ cmd: 'SET_TARGET', pos: [targetX, targetY, targetZ] });
+                }
+                if (window.tacticalHud) {
+                    window.tacticalHud.logEvent('DISPATCH', `Ground click waypoint -> [${targetX}, ${targetY}, ${targetZ}]`);
+                }
+            }
+        }
+    }
+
+    function spawnClickRipple(x, y) {
+        const geom = new THREE.RingGeometry(0.5, 0.9, 32);
+        const mat = new THREE.MeshBasicMaterial({
+            color: COLORS.target,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.9,
+        });
+        const ripple = new THREE.Mesh(geom, mat);
+        ripple.position.set(x, y, 0.1);
+        scene.add(ripple);
+
+        activeRipples.push({
+            mesh: ripple,
+            born: performance.now(),
+            lifetime: 600,
+        });
+    }
+
+    function updateRipples() {
+        const now = performance.now();
+        for (let i = activeRipples.length - 1; i >= 0; i--) {
+            const r = activeRipples[i];
+            const age = now - r.born;
+            if (age >= r.lifetime) {
+                scene.remove(r.mesh);
+                r.mesh.geometry.dispose();
+                r.mesh.material.dispose();
+                activeRipples.splice(i, 1);
+            } else {
+                const progress = age / r.lifetime;
+                const scale = 1.0 + progress * 7.0;
+                r.mesh.scale.set(scale, scale, 1);
+                r.mesh.material.opacity = (1.0 - progress) * 0.9;
+            }
+        }
+    }
+
     function onWindowResize() {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
