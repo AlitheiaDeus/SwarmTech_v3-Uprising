@@ -157,7 +157,16 @@ class MavlinkBridge:
             self.sim.cut_tether()
             return {"status": "OK", "cmd": cmd, "tether_severed": self.sim.tether_severed}
 
+        elif cmd == "SET_BRAIN":
+            name = cmd_dict.get("brain", "LEADER_FOLLOWER")
+            ok = self.sim.set_brain(name)
+            return {"status": "OK" if ok else "INVALID_BRAIN", "cmd": cmd, "active_brain": self.sim.active_brain_name}
+
         else:
+            # Check active brain hook
+            brain_res = self.sim.brain.handle_command(cmd_dict)
+            if brain_res is not None:
+                return {"status": "OK", **brain_res}
             return {"status": "UNKNOWN_COMMAND", "cmd": cmd}
 
     def emit_mavlink_loopback(self) -> int:

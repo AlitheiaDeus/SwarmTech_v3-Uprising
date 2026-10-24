@@ -11,6 +11,8 @@ import time
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 
+from backend.brains import BaseBrain, BRAIN_REGISTRY, LeaderFollowerBrain, GossipConsensusBrain
+
 
 # ==============================================================================
 # Physical Constants & Tuning Parameters
@@ -159,6 +161,20 @@ class SwarmSimulator:
         self.drones: List[Drone] = []
         self._init_fleet(drone_count)
 
+        # Pluggable Guidance Brain Plugin (Default: LeaderFollowerBrain)
+        self.active_brain_name: str = "LEADER_FOLLOWER"
+        self.brain: BaseBrain = LeaderFollowerBrain(self)
+
+    def set_brain(self, brain_name: str) -> bool:
+        """Hot-swap the guidance brain plugin at runtime."""
+        key = brain_name.upper()
+        if key in BRAIN_REGISTRY:
+            self.active_brain_name = key
+            self.brain = BRAIN_REGISTRY[key](self)
+            self.brain.reset()
+            return True
+        return False
+
     def _init_fleet(self, count: int) -> None:
         """Initialize leader and followers in safe starting formation."""
         self.drones.clear()
@@ -203,20 +219,26 @@ class SwarmSimulator:
         """Advance the simulation world by dt seconds."""
         self.sim_time += dt
 
-        # 1. Radio Comms Broadcast & Lost-Link Evaluation (10 Hz)
-        self._update_radio_comms()
+        # 1. Comms & Packet Protocol from active Brain Plugin
+        self.brain.update_comms(dt)
 
-        # 2. Check Tether Dynamics & Severance
-        self._update_tether_dynamics()
+        # 2. Check Tether Dynamics & Severance (LeaderFollowerBrain)
+        if self.active_brain_name == "LEADER_FOLLOWER":
+            self._update_tether_dynamics()
 
-        # 3. Compute Guidance Targets & Steering
-        guidance_accs = self._compute_guidance_accelerations()
+        # 3. Compute Guidance Targets from active Brain Plugin
+        guidance_accs = self.brain.compute_guidance(dt)
 
         # 4. Compute 4-Zone Separation & Relative-Velocity Evasion
+        # Bounded flight controller steering effort (not god-mode physics)
         avoidance_accs = self._compute_4zone_avoidance()
 
-        # 5. Compute Tether Clearance Repulsion
-        tether_accs = self._compute_tether_avoidance()
+        # 5. Compute Tether Clearance Repulsion (if tethered)
+        tether_accs = (
+            self._compute_tether_avoidance()
+            if self.active_brain_name == "LEADER_FOLLOWER"
+            else {d.id: np.zeros(3, dtype=float) for d in self.drones}
+        )
 
         # 6. Integrate Kinematics (Euler) & Boundary Clamps
         for drone in self.drones:
@@ -665,6 +687,7 @@ class SwarmSimulator:
     def reboot_fleet(self) -> None:
         """Reset and reboot all drones back to nominal starting states."""
         self._init_fleet(len(self.drones))
+        self.brain.reset()
 
     def cut_tether(self) -> None:
         """Operator manual tether severance directive."""
@@ -682,10 +705,14 @@ class SwarmSimulator:
         ]
         if mode in valid_modes:
             self.formation_mode = mode
+            if hasattr(self.brain, "formation_mode"):
+                self.brain.formation_mode = mode
 
     def set_target(self, pos: List[float]) -> None:
         """Set global 3D mission target waypoint."""
         self.target_pos = np.array(pos, dtype=float)
+        if hasattr(self.brain, "inject_target"):
+            self.brain.inject_target(pos)
 
     # ==========================================================================
     # 7. Telemetry Snapshot Serialization
@@ -700,7 +727,8 @@ class SwarmSimulator:
         return {
             "sim_time": round(float(self.sim_time), 3),
             "dt": DT,
-            "formation": self.formation_mode,
+            "brain": self.active_brain_name,
+            "formation": getattr(self.brain, "formation_mode", self.formation_mode),
             "target": [round(float(v), 2) for v in self.target_pos],
             "tether": {
                 "anchor": [round(float(v), 2) for v in self.tether_anchor],
@@ -709,4 +737,5 @@ class SwarmSimulator:
                 "length": round(tether_len, 2),
             },
             "drones": [d.to_dict() for d in self.drones],
+            "brain_telemetry": self.brain.get_telemetry_extra(),
         }
