@@ -266,6 +266,7 @@ html, body {
   border-radius: 3px;
   padding: 10px;
   margin-bottom: 8px;
+  cursor: pointer;
   transition: all 0.2s ease;
 }
 

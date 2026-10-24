@@ -329,6 +329,13 @@
             }
         });
 
+        el.addEventListener('click', () => {
+            logEvent('NAV', `Tactical camera focused on Drone #${drone.id}`);
+            if (window.selectDrone) {
+                window.selectDrone(drone.id);
+            }
+        });
+
         return {
             el: el,
             elAlt: el.querySelector('.metric-alt'),

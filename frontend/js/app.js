@@ -375,6 +375,123 @@
         return shadowMesh;
     }
 
+    // 3D Billboard Tactical ID Badge Floating Above Drone Airframe
+    function createDroneBadge(droneId, isLeader) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 64;
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.minFilter = THREE.LinearFilter;
+
+        const spriteMat = new THREE.SpriteMaterial({
+            map: texture,
+            transparent: true,
+            depthTest: false,
+        });
+        const sprite = new THREE.Sprite(spriteMat);
+        sprite.scale.set(2.4, 0.6, 1.0);
+        sprite.userData = { canvas, texture, lastKey: '' };
+        scene.add(sprite);
+        return sprite;
+    }
+
+    function updateDroneBadge(sprite, d) {
+        if (!sprite || !sprite.userData) return;
+        const { canvas, texture } = sprite.userData;
+        const key = `${d.id}_${d.is_leader}_${d.crashed}_${d.lost_link}_${d.status}`;
+        if (sprite.userData.lastKey === key) return;
+        sprite.userData.lastKey = key;
+
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Cyberpunk tactical styling
+        let borderColor = '#00F0FF';
+        let bgColor = 'rgba(6, 16, 25, 0.88)';
+        let textColor = '#00F0FF';
+        let labelText = `#${d.id}`;
+        let subText = 'ESCORT';
+        let dotColor = '#00F0FF';
+
+        if (d.crashed) {
+            borderColor = '#FF3366';
+            bgColor = 'rgba(45, 10, 20, 0.92)';
+            textColor = '#FF3366';
+            labelText = `#${d.id}`;
+            subText = 'CRASHED';
+            dotColor = '#FF3366';
+        } else if (d.is_leader) {
+            borderColor = '#FFB800';
+            bgColor = 'rgba(42, 28, 4, 0.92)';
+            textColor = '#FFB800';
+            labelText = `#${d.id}`;
+            subText = 'FLAGSHIP';
+            dotColor = '#FFB800';
+        } else if (d.lost_link) {
+            borderColor = '#FFB800';
+            bgColor = 'rgba(38, 26, 5, 0.92)';
+            textColor = '#FFD24D';
+            labelText = `#${d.id}`;
+            subText = 'LOST LINK';
+            dotColor = '#FFB800';
+        } else if (d.status === 'PROPAGATING') {
+            borderColor = '#00FFAA';
+            bgColor = 'rgba(4, 32, 20, 0.92)';
+            textColor = '#00FFAA';
+            labelText = `#${d.id}`;
+            subText = 'ECHO';
+            dotColor = '#00FFAA';
+        }
+
+        // Draw rounded tactical card
+        const x = 4, y = 4, w = 248, h = 56, r = 8;
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+
+        ctx.fillStyle = bgColor;
+        ctx.fill();
+
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = borderColor;
+        ctx.shadowColor = borderColor;
+        ctx.shadowBlur = 12;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Status indicator dot
+        ctx.beginPath();
+        ctx.arc(28, 32, 6, 0, Math.PI * 2);
+        ctx.fillStyle = dotColor;
+        ctx.shadowColor = dotColor;
+        ctx.shadowBlur = 8;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Drone ID number
+        ctx.font = 'bold 22px "JetBrains Mono", Consolas, monospace';
+        ctx.fillStyle = '#FFFFFF';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(labelText, 44, 32);
+
+        // Role subtext
+        ctx.font = 'bold 15px "JetBrains Mono", Consolas, monospace';
+        ctx.fillStyle = textColor;
+        ctx.textAlign = 'right';
+        ctx.fillText(subText, 238, 32);
+
+        texture.needsUpdate = true;
+    }
+
     // =========================================================================
     // 4. Telemetry Frame Ingestion & Interpolation
     // =========================================================================
@@ -403,10 +520,12 @@
                     scene.add(mesh);
                     const dropLine = createDropLine(d.is_leader);
                     const shadow = createGroundShadow(d.is_leader);
+                    const badge = createDroneBadge(d.id, d.is_leader);
                     entry = {
                         mesh: mesh,
                         dropLine: dropLine,
                         shadow: shadow,
+                        badge: badge,
                         targetPos: new THREE.Vector3(...d.pos),
                         currentPos: new THREE.Vector3(...d.pos),
                         yaw: d.yaw || 0,
@@ -429,19 +548,48 @@
                 entry.status = d.status;
                 entry.rotorSpeed = d.crashed ? 0 : 0.45;
 
-                // Color tinting based on status / brain state
+                // Update 3D Tactical ID Badge
+                updateDroneBadge(entry.badge, d);
+
+                // Dynamic Rotor Disc, Core, Drop-Line & Shadow Role Tinting
+                let rotorColor = COLORS.escort;
+                let rotorOpacity = 0.45;
+                let indicatorColor = COLORS.dropLine;
+
+                if (d.crashed) {
+                    rotorColor = 0x661122; // Dim dead red
+                    rotorOpacity = 0.2;
+                    indicatorColor = COLORS.crashed;
+                } else if (d.is_leader) {
+                    rotorColor = COLORS.leader; // Bright neon amber
+                    rotorOpacity = 0.65;
+                    indicatorColor = COLORS.leader;
+                } else if (d.status === 'PROPAGATING') {
+                    rotorColor = COLORS.propagating; // Pulse echo amber
+                    rotorOpacity = 0.55;
+                    indicatorColor = COLORS.propagating;
+                }
+
+                // Update rotor discs
+                if (entry.mesh.userData.rotors) {
+                    entry.mesh.userData.rotors.forEach(r => {
+                        r.material.color.setHex(rotorColor);
+                        r.material.opacity = rotorOpacity;
+                    });
+                }
+
+                // Update core
                 const coreMesh = entry.mesh.getObjectByName('core');
                 if (coreMesh) {
-                    if (d.crashed) {
-                        coreMesh.material.color.setHex(COLORS.crashed);
-                    } else if (d.is_leader) {
-                        coreMesh.material.color.setHex(COLORS.leader);
-                    } else if (d.status === 'PROPAGATING') {
-                        // Gossip echo wave pulsing amber
-                        coreMesh.material.color.setHex(COLORS.propagating);
-                    } else {
-                        coreMesh.material.color.setHex(COLORS.escort);
-                    }
+                    coreMesh.material.color.setHex(indicatorColor);
+                }
+
+                // Update drop line and shadow colors
+                if (entry.dropLine && entry.dropLine.material) {
+                    entry.dropLine.material.color.setHex(indicatorColor);
+                }
+                if (entry.shadow && entry.shadow.material) {
+                    entry.shadow.material.color.setHex(indicatorColor);
                 }
 
                 if (d.is_leader && !d.crashed) {
@@ -463,6 +611,11 @@
                     scene.remove(entry.shadow);
                     entry.shadow.geometry.dispose();
                     entry.shadow.material.dispose();
+                }
+                if (entry.badge) {
+                    scene.remove(entry.badge);
+                    if (entry.badge.material.map) entry.badge.material.map.dispose();
+                    entry.badge.material.dispose();
                 }
                 dronesMap.delete(id);
             }
@@ -581,6 +734,11 @@
                 entry.shadow.position.set(p.x, p.y, 0.05);
                 entry.shadow.rotation.set(0, 0, 0);
                 entry.shadow.visible = !entry.crashed || p.z > 0.3;
+            }
+
+            // Update 3D Tactical ID Badge Position (floating plumb 1.35m above drone)
+            if (entry.badge) {
+                entry.badge.position.set(entry.currentPos.x, entry.currentPos.y, entry.currentPos.z + 1.35);
             }
         }
 
@@ -733,6 +891,13 @@
             console.log('[CAM] Camera reset to tactical overview.');
         }
     }
+
+    // Public API for HUD interaction
+    window.selectDrone = function(id) {
+        targetDroneId = id;
+        isChaseCam = true;
+        console.log(`[CAM] Focused camera on Drone #${id}`);
+    };
 
     // Initialize when DOM is ready
     window.addEventListener('DOMContentLoaded', init);
