@@ -1,0 +1,43 @@
+# ==============================================================================
+# SwarmTech3_UpRising .gitignore
+# Prevents accidental commits of private specs, machine paths, and runtime artifacts
+# ==============================================================================
+
+# Private Specs & Landmarks (as requested)
+AGENTS.md
+AGENTS.MD
+agents.md
+GEMINI.md
+SWARM_UPRISING_SPEC.md
+SWARM_OVERHAUL_HANDOFF_SPEC.md
+
+# Machine-Specific Scripts & Local Environments
+run.ps1
+*.ps1
+*.bat
+*.cmd
+.env*
+*.local
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor & OS Metadata
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs & Temporary Files
+*.log
+logs/
+tmp/
+scratch/
