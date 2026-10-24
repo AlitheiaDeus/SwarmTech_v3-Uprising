@@ -60,3 +60,21 @@ kanban
 1. **WIP = 1**: At most one active ticket in `In Progress` at any time.
 2. **Verification Gate**: No ticket moves to `Completed` without passing automated unit tests or smoke tests.
 3. **User Sign-Off**: Cards in `Completed` remain for user testing and review until explicitly approved for archival.
+
+---
+
+## 4. Recommended Implementation Sequence for Next Session (Pinned)
+
+1. **Step 1: Stabilize Formation Kinematics (`[TKT-09]` + `[TKT-10]`)**:
+   - `[TKT-09]`: Freeze Echelon heading at low speeds ($<1.5\text{ m/s}$) + bounded slew filter ($\le 45^\circ/\text{s}$) + $0.25\text{m}$ arrival deadband. *Eliminates escort whipping on target arrival.*
+   - `[TKT-10]`: Set $\omega = 0.0$ for `PERIMETER_PATROL` with static azimuthal distribution. *Converts carousel into static sentry ring.*
+2. **Step 2: Operator Ergonomics & Casualty Recovery (`[TKT-13]` + `[TKT-07]`)**:
+   - `[TKT-13]`: One-click `RESPAWN ALL CASUALTIES` button to reboot all dead drones in-place.
+   - `[TKT-07]`: Vertical climb state machine on drone reboot ($Z \ge 15\text{m}$) before boid flocking forces engage.
+3. **Step 3: Decentralized Swarm Geometries (`[TKT-11]`)**:
+   - `[TKT-11]`: Implement virtual-anchor consensus formations for Gossip mesh (distributed sentry ring / grid).
+4. **Step 4: Dynamic Flight Demonstration (`[TKT-12]`)**:
+   - `[TKT-12]`: Continuous 3D auto-patrol circuit for dynamic swarm pursuit.
+5. **Step 5: Architectural Decisions (`[PLN-01]`, `[PLN-02]`)**:
+   - `[PLN-01]`: Tether severance policy (ballistic power cut vs 2-minute emergency battery RTB).
+   - `[PLN-02]`: Gossip mode tether visibility (untethered mesh vs GCS gateway).
