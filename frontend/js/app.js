@@ -340,10 +340,13 @@
         fwdLed.position.set(0.32 * scale, 0, 0);
         droneGroup.add(fwdLed);
 
-        // 5. True 3D Perspective Drop-Line
+        return droneGroup;
+    }
+
+    function createDropLine(isLeader) {
         const dropLineGeom = new THREE.BufferGeometry().setFromPoints([
             new THREE.Vector3(0, 0, 0),
-            new THREE.Vector3(0, 0, -20),
+            new THREE.Vector3(0, 0, 0),
         ]);
         const dropLineMat = new THREE.LineDashedMaterial({
             color: isLeader ? COLORS.leader : COLORS.dropLine,
@@ -354,10 +357,12 @@
             opacity: 0.5,
         });
         const dropLine = new THREE.Line(dropLineGeom, dropLineMat);
-        dropLine.name = 'dropLine';
-        droneGroup.add(dropLine);
+        scene.add(dropLine);
+        return dropLine;
+    }
 
-        // 6. Ground Shadow / Reticle Marker
+    function createGroundShadow(isLeader) {
+        const scale = isLeader ? 1.15 : 1.0;
         const shadowGeom = new THREE.RingGeometry(0.8 * scale, 1.0 * scale, 16);
         const shadowMat = new THREE.MeshBasicMaterial({
             color: isLeader ? COLORS.leader : COLORS.dropLine,
@@ -366,10 +371,8 @@
             opacity: 0.45,
         });
         const shadowMesh = new THREE.Mesh(shadowGeom, shadowMat);
-        shadowMesh.name = 'shadow';
-        droneGroup.add(shadowMesh);
-
-        return droneGroup;
+        scene.add(shadowMesh);
+        return shadowMesh;
     }
 
     // =========================================================================
@@ -398,8 +401,12 @@
                 if (!entry) {
                     const mesh = buildQuadcopterMesh(d.is_leader);
                     scene.add(mesh);
+                    const dropLine = createDropLine(d.is_leader);
+                    const shadow = createGroundShadow(d.is_leader);
                     entry = {
                         mesh: mesh,
+                        dropLine: dropLine,
+                        shadow: shadow,
                         targetPos: new THREE.Vector3(...d.pos),
                         currentPos: new THREE.Vector3(...d.pos),
                         yaw: d.yaw || 0,
@@ -447,6 +454,16 @@
         for (let [id, entry] of dronesMap.entries()) {
             if (!activeIds.has(id)) {
                 scene.remove(entry.mesh);
+                if (entry.dropLine) {
+                    scene.remove(entry.dropLine);
+                    entry.dropLine.geometry.dispose();
+                    entry.dropLine.material.dispose();
+                }
+                if (entry.shadow) {
+                    scene.remove(entry.shadow);
+                    entry.shadow.geometry.dispose();
+                    entry.shadow.material.dispose();
+                }
                 dronesMap.delete(id);
             }
         }
@@ -543,21 +560,27 @@
                 });
             }
 
-            // Update 3D Drop-Line from (x, y, z) to (x, y, 0)
-            const dropLine = entry.mesh.getObjectByName('dropLine');
-            if (dropLine) {
-                const zAlt = entry.currentPos.z;
-                dropLine.geometry.setFromPoints([
-                    new THREE.Vector3(0, 0, 0),
-                    new THREE.Vector3(0, 0, -zAlt),
-                ]);
-                dropLine.computeLineDistances();
+            // Update 3D World Drop-Line from (x, y, z) down to (x, y, 0)
+            if (entry.dropLine) {
+                const p = entry.currentPos;
+                if (p.z > 0.3 && !entry.crashed) {
+                    entry.dropLine.visible = true;
+                    entry.dropLine.geometry.setFromPoints([
+                        new THREE.Vector3(p.x, p.y, p.z),
+                        new THREE.Vector3(p.x, p.y, 0),
+                    ]);
+                    entry.dropLine.computeLineDistances();
+                } else {
+                    entry.dropLine.visible = false;
+                }
             }
 
-            // Update Ground Shadow ring position at z=0 (relative to drone)
-            const shadow = entry.mesh.getObjectByName('shadow');
-            if (shadow) {
-                shadow.position.set(0, 0, -entry.currentPos.z + 0.05);
+            // Update Ground Shadow ring: strictly flat on ground plane (z=0.05) directly underneath
+            if (entry.shadow) {
+                const p = entry.currentPos;
+                entry.shadow.position.set(p.x, p.y, 0.05);
+                entry.shadow.rotation.set(0, 0, 0);
+                entry.shadow.visible = !entry.crashed || p.z > 0.3;
             }
         }
 
