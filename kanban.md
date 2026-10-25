@@ -69,17 +69,17 @@ kanban
 
 ## 4. Recommended Implementation Sequence for Next Session (Pinned)
 
-1. **Step 1: Stabilize Formation Kinematics (`[TKT-09]` + `[TKT-10]`)**:
-   - `[TKT-09]`: Freeze Echelon heading at low speeds ($<1.5\text{ m/s}$) + bounded slew filter ($\le 45^\circ/\text{s}$) + $0.25\text{m}$ arrival deadband. *Eliminates escort whipping on target arrival.*
-   - `[TKT-10]`: Set $\omega = 0.0$ for `PERIMETER_PATROL` with static azimuthal distribution. *Converts carousel into static sentry ring.*
-2. **Step 2: Operator Ergonomics & Casualty Recovery (`[TKT-13]` + `[TKT-07]`)**:
-   - `[TKT-13]`: One-click `RESPAWN ALL CASUALTIES` button to reboot all dead drones in-place.
-   - `[TKT-07]`: Vertical climb state machine on drone reboot ($Z \ge 15\text{m}$) before boid flocking forces engage.
-3. **Step 3: Decentralized Swarm Geometries (`[TKT-11]`)**:
-   - `[TKT-11]`: Implement virtual-anchor consensus formations for Gossip mesh (distributed sentry ring / grid).
-4. **Step 4: Dynamic Flight Demonstration (`[TKT-12]`)**:
-   - `[TKT-12]`: Continuous 3D auto-patrol circuit for dynamic swarm pursuit.
-5. **Step 5: Architectural Decisions (`[PLN-01]`, `[PLN-02]`, `[PLN-03]`)**:
-   - `[PLN-01]`: Tether severance policy (ballistic power cut vs 2-minute emergency battery RTB).
-   - `[PLN-02]`: Gossip mode tether visibility (untethered mesh vs GCS gateway).
-   - `[PLN-03]`: Packet loss & RF degradation model (path loss vs operator jamming slider vs link metrics).
+1. **Step 1: Battlefield Salvage & Cleanup (`[TKT-14]`)** *(Immediate Next Task)*:
+   - Implement `clear_crashed_wreckage()` in `sim_core.py` to purge dead/crashed drones from `sim.drones`.
+   - Add `CLEAR_WRECKAGE` WebSocket (`web_server.py`) and UDP (`mavlink_bridge.py`) commands.
+   - In `app.js`, dispose Three.js meshes, rotors, drop-lines, ground shadows, and 3D badges for vanished IDs.
+   - In `hud.js`, remove dead telemetry cards and add `[⌫ CLEAR WRECKAGE]` button in Casualty Lab.
+2. **Step 2: Decentralized Swarm Geometries (`[TKT-11]`)** *(High Priority)*:
+   - Implement consensus-based virtual anchor slot offsets in `GossipConsensusBrain` so P2P mesh forms structured perimeter sentry rings and grids instead of clumping into a single point.
+3. **Step 3: Continuous Dynamic Flight Patrol (`[TKT-12]`)** *(Medium Priority)*:
+   - Add `TOGGLE_TARGET_PATROL` command and backend parametric 3D waypoint auto-patrol path generator ($X(t), Y(t), Z(t)$ with altitude variation $Z=15\text{m}-40\text{m}$) for hands-free observation of dynamic swarm pursuit.
+4. **Step 4: Contested RF & Packet Loss Simulation (`[PLN-03]`)**:
+   - Model distance-dependent path loss and operator RF degradation / jamming slider (0%–50%) on GCS HUD to test LKP failover & gossip quorum resilience.
+5. **Step 5: Architectural Decisions & System Policies (`[PLN-01]`, `[PLN-02]`)**:
+   - `[PLN-01]`: Settle tether severance behavior (hard power loss vs 2-minute emergency battery RTB).
+   - `[PLN-02]`: Settle Gossip mode tether visibility (untethered mesh vs stationary GCS gateway).
