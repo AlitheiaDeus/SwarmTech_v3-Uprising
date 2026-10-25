@@ -109,6 +109,16 @@
             }
         });
 
+        setupBtn('btn-clear-wreckage', () => {
+            const deadCount = deadDroneIds.size;
+            if (deadCount > 0) {
+                logEvent('CMD', `Salvaging ${deadCount} destroyed wreckage: CLEAR_WRECKAGE`);
+                window.swarmClient?.send({ cmd: 'CLEAR_WRECKAGE' });
+            } else {
+                logEvent('INFO', 'No crashed wreckage on battlefield.');
+            }
+        });
+
         setupBtn('btn-reinforce-swarm', () => {
             logEvent('CMD', 'Launching reinforcement drone from base pad: LAUNCH_REINFORCEMENT');
             window.swarmClient?.send({ cmd: 'LAUNCH_REINFORCEMENT' });
@@ -204,6 +214,19 @@
         // 5. Update Drone Telemetry Cards
         if (Array.isArray(frame.drones) && cardsContainer) {
             let leaderFound = null;
+
+            // Purge card DOM elements and tracking sets for vanished drones (e.g. cleared wreckage)
+            const activeIds = new Set(frame.drones.map(d => d.id));
+            for (let [id, card] of droneCards.entries()) {
+                if (!activeIds.has(id)) {
+                    card.el.remove();
+                    droneCards.delete(id);
+                    deadDroneIds.delete(id);
+                    lostLinkIds.delete(id);
+                    takeoffDroneIds.delete(id);
+                    enrouteDroneIds.delete(id);
+                }
+            }
 
             frame.drones.forEach(d => {
                 if (d.is_leader && !d.crashed) {
@@ -456,7 +479,11 @@
 
     function onCommandAck(ack) {
         if (ack && ack.cmd) {
-            logEvent('ACK', `Command ${ack.cmd} acknowledged: ${JSON.stringify(ack)}`);
+            if (ack.cmd === 'CLEAR_WRECKAGE' && Array.isArray(ack.purged_ids)) {
+                logEvent('ACK', `Salvage complete: Cleared ${ack.count} wreckage [${ack.purged_ids.join(', ')}]. Remaining: ${ack.remaining_drones}.`);
+            } else {
+                logEvent('ACK', `Command ${ack.cmd} acknowledged: ${JSON.stringify(ack)}`);
+            }
         }
     }
 

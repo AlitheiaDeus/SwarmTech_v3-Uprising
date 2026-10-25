@@ -155,6 +155,24 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(self.sim.drones), initial_count + 1)
                 self.assertEqual(self.sim.drones[-1].flight_state, "TAKEOFF")
 
+                # Send KILL_DRONE command to kill drone #1
+                cmd_kill_drone = {"cmd": "KILL_DRONE", "id": 1}
+                await ws.send_str(json.dumps(cmd_kill_drone))
+                ack_kill = await wait_for_ack(ws, "KILL_DRONE")
+                self.assertEqual(ack_kill.get("status"), "OK")
+                self.assertTrue(any(d.id == 1 and d.crashed for d in self.sim.drones))
+
+                # Send CLEAR_WRECKAGE command
+                count_before_clear = len(self.sim.drones)
+                cmd_clear = {"cmd": "CLEAR_WRECKAGE"}
+                await ws.send_str(json.dumps(cmd_clear))
+
+                ack_clear = await wait_for_ack(ws, "CLEAR_WRECKAGE")
+                self.assertEqual(ack_clear.get("status"), "OK")
+                self.assertIn(1, ack_clear.get("purged_ids", []))
+                self.assertFalse(any(d.id == 1 for d in self.sim.drones))
+                self.assertEqual(len(self.sim.drones), count_before_clear - 1)
+
 
 if __name__ == "__main__":
     unittest.main()

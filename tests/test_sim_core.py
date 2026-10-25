@@ -381,6 +381,49 @@ class TestSimCore(unittest.TestCase):
         self.assertEqual(drone.status, "FLEET_LEADER")
         self.assertEqual(self.sim.leader.id, drone.id)
 
+    def test_clear_crashed_wreckage(self):
+        """Verify battlefield salvage purges destroyed drones and preserves monotonic IDs."""
+        # 1. No dead drones: returns empty list
+        purged = self.sim.clear_crashed_wreckage()
+        self.assertEqual(purged, [])
+        self.assertEqual(len(self.sim.drones), 6)
+
+        # 2. Kill 2 drones (#2 and #4)
+        self.sim.kill_drone(2)
+        self.sim.kill_drone(4)
+        self.assertTrue(self.sim.drones[2].crashed)
+        self.assertTrue(self.sim.drones[4].crashed)
+
+        # 3. Clear wreckage
+        purged = self.sim.clear_crashed_wreckage()
+        self.assertEqual(sorted(purged), [2, 4])
+        self.assertEqual(len(self.sim.drones), 4)
+
+        remaining_ids = [d.id for d in self.sim.drones]
+        self.assertEqual(remaining_ids, [0, 1, 3, 5])
+        for d in self.sim.drones:
+            self.assertFalse(d.crashed)
+
+        # 4. Monotonic ID generation after wreckage purge (no reuse of 2 or 4)
+        new_drone = self.sim.launch_reinforcement()
+        self.assertEqual(new_drone.id, 6)
+        self.assertEqual(len(self.sim.drones), 5)
+
+        # 5. Clear all dead drones and ensure sim handles empty fleet safely
+        for d in list(self.sim.drones):
+            self.sim.kill_drone(d.id)
+        self.assertEqual(len([d for d in self.sim.drones if d.crashed]), 5)
+
+        all_purged = self.sim.clear_crashed_wreckage()
+        self.assertEqual(len(all_purged), 5)
+        self.assertEqual(len(self.sim.drones), 0)
+        self.assertIsNone(self.sim.leader)
+
+        # Launching reinforcement into cleared battlefield
+        survivor = self.sim.launch_reinforcement()
+        self.assertEqual(survivor.id, 7)
+        self.assertEqual(len(self.sim.drones), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

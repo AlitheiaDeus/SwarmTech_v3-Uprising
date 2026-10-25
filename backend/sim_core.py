@@ -193,6 +193,7 @@ class SwarmSimulator:
 
         # Build Drone Fleet
         self.drones: List[Drone] = []
+        self._highest_drone_id: int = drone_count - 1
         self._init_fleet(drone_count)
 
         # Pluggable Guidance Brain Plugin (Default: LeaderFollowerBrain)
@@ -213,6 +214,7 @@ class SwarmSimulator:
         """Initialize leader and followers in safe starting formation."""
         self.drones.clear()
         self.tether_severed = False
+        self._highest_drone_id = count - 1
 
         # Leader #0 positioned at (0, 0, 20)
         leader = Drone(
@@ -758,8 +760,9 @@ class SwarmSimulator:
         Assigns the next sequential drone ID (max_id + 1).
         Spawns on the base launch pad, climbing vertically to safe cruise altitude (Z >= 20m)
         before transitioning to EN_ROUTE and joining the active formation."""
-        max_id = max((d.id for d in self.drones), default=-1)
-        new_id = max_id + 1
+        current_max = max((d.id for d in self.drones), default=-1)
+        self._highest_drone_id = max(getattr(self, "_highest_drone_id", -1), current_max) + 1
+        new_id = self._highest_drone_id
 
         # Base launch pad coordinates outside the 3.0m tether clearance envelope
         # Pad centered at (0.0, -6.0, 0.5) with multi-drone grid layout (>= 2.5m separation)
@@ -842,6 +845,26 @@ class SwarmSimulator:
             revived_ids.append(drone.id)
 
         return revived_ids
+
+    def clear_crashed_wreckage(self) -> List[int]:
+        """Purge all destroyed/crashed drones from the simulation.
+        Returns list of removed drone IDs."""
+        purged_ids = [d.id for d in self.drones if d.crashed]
+        if not purged_ids:
+            return []
+
+        self.drones = [d for d in self.drones if not d.crashed]
+
+        # Clean up peer states if in gossip consensus brain mode
+        if hasattr(self.brain, "peer_states"):
+            for pid in purged_ids:
+                self.brain.peer_states.pop(pid, None)
+
+        # If fleet has surviving drones but no active leader, elect one
+        if self.leader is None and self.drones:
+            self._trigger_autonomic_succession(demote_old_leader=False)
+
+        return purged_ids
 
     def reboot_fleet(self) -> None:
         """Reset and reboot all drones back to nominal starting states."""

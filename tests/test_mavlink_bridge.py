@@ -102,14 +102,16 @@ class TestMavlinkBridge(unittest.TestCase):
             self.assertTrue(self.sim.drones[old_leader_id].crashed)
             self.assertNotEqual(self.sim.leader.id, old_leader_id)
 
-            # 5. Test REBOOT_FLEET
-            cmd_reboot = {"cmd": "REBOOT_FLEET"}
-            sender.sendto(json.dumps(cmd_reboot).encode("utf-8"), (self.host, self.rx_port))
+            # 5b. Test CLEAR_WRECKAGE
+            self.sim.kill_drone(1)
+            cmd_clear = {"cmd": "CLEAR_WRECKAGE"}
+            sender.sendto(json.dumps(cmd_clear).encode("utf-8"), (self.host, self.rx_port))
 
             responses = self.bridge.poll_commands()
             self.assertEqual(len(responses), 1)
-            self.assertFalse(self.sim.drones[0].crashed)
-            self.assertFalse(self.sim.tether_severed)
+            self.assertEqual(responses[0]["status"], "OK")
+            self.assertIn(1, responses[0]["purged_ids"])
+            self.assertFalse(any(d.id == 1 for d in self.sim.drones))
 
         finally:
             sender.close()

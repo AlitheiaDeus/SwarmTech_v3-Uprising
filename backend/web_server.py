@@ -185,6 +185,16 @@ class SwarmWebServer:
                 "count": len(revived),
             }
 
+        elif cmd in ("CLEAR_WRECKAGE", "SALVAGE_WRECKAGE", "CLEAR_CASUALTIES"):
+            purged = self.sim.clear_crashed_wreckage()
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "purged_ids": purged,
+                "count": len(purged),
+                "remaining_drones": len(self.sim.drones),
+            }
+
         elif cmd == "REBOOT_FLEET":
             self.sim.reboot_fleet()
             return {"status": "OK", "cmd": cmd, "drone_count": len(self.sim.drones)}

@@ -639,6 +639,9 @@
                     if (entry.badge.material.map) entry.badge.material.map.dispose();
                     entry.badge.material.dispose();
                 }
+                if (targetDroneId === id) {
+                    targetDroneId = null;
+                }
                 dronesMap.delete(id);
             }
         }
