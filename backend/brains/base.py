@@ -44,6 +44,10 @@ class BaseBrain(ABC):
         formation mode switch, succession triggers). Returns response dict or None."""
         return None
 
+    def on_succession(self, old_leader: Optional[Drone], new_leader: Drone) -> None:
+        """Optional hook invoked when autonomic succession elects a new leader."""
+        pass
+
     def get_telemetry_extra(self) -> Dict[str, Any]:
         """Optional dictionary of brain-specific state variables to include
         in the WebSocket JSON telemetry stream."""

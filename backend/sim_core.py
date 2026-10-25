@@ -115,6 +115,11 @@ class Drone:
         self.status: str = "ACTIVE" if not is_leader else "FLEET_LEADER"
         self.tether_lost: bool = False
 
+        # Succession Deconfliction & Lateral Peel-Off (TKT-15)
+        self.peel_off_timer: float = 0.0
+        self.peel_off_dir: np.ndarray = np.zeros(3, dtype=float)
+        self.promotion_timer: float = 0.0
+
     def reset_state(
         self,
         pos: np.ndarray,
@@ -138,6 +143,9 @@ class Drone:
         self.is_leader = is_leader
         self.status = "FLEET_LEADER" if is_leader else "ACTIVE"
         self.tether_lost = False
+        self.peel_off_timer = 0.0
+        self.peel_off_dir = np.zeros(3, dtype=float)
+        self.promotion_timer = 0.0
 
     def succession_score(self) -> int:
         """Calculate autonomic succession eligibility score: (Tier * 1000) - ID."""
@@ -576,7 +584,10 @@ class SwarmSimulator:
 
     def _get_formation_slot(self, drone: Drone, leader: Drone) -> np.ndarray:
         """Calculate the desired 3D slot coordinate for a follower based on the active formation mode."""
-        # Follower order index among living followers
+        if hasattr(self, "brain") and hasattr(self.brain, "_get_formation_slot"):
+            return self.brain._get_formation_slot(drone, leader)
+
+        # Fallback to local calculation if brain not initialized
         living_followers = [
             d for d in self.drones if not d.crashed and not d.is_leader
         ]
@@ -752,20 +763,50 @@ class SwarmSimulator:
         # Sort by succession score descending
         candidates.sort(key=lambda d: d.succession_score(), reverse=True)
         new_leader = candidates[0]
+        old_leader: Optional[Drone] = None
 
         # Demote previous leader
         if demote_old_leader:
             for drone in self.drones:
                 if drone.id != new_leader.id and drone.is_leader:
+                    old_leader = drone
                     drone.is_leader = False
                     if not drone.crashed:
                         drone.status = "ACTIVE"
+                        # Lateral Peel-Off Corridor Deconfliction (TKT-15)
+                        speed_xy = math.hypot(drone.vel[0], drone.vel[1])
+                        if speed_xy > 0.5:
+                            heading = np.array([drone.vel[0] / speed_xy, drone.vel[1] / speed_xy, 0.0], dtype=float)
+                        else:
+                            heading = np.array([math.cos(drone.yaw), math.sin(drone.yaw), 0.0], dtype=float)
+                        lat = np.array([-heading[1], heading[0], 0.0], dtype=float)
+
+                        # Determine relative lateral displacement of promoted successor
+                        rel_pos = new_leader.pos - drone.pos
+                        d_lat = float(np.dot(rel_pos, lat))
+
+                        # Peel away from successor's approach side (anti-jousting)
+                        peel_dir = -lat if d_lat > 0.0 else lat
+                        norm_peel = float(np.linalg.norm(peel_dir))
+                        if norm_peel > 0.01:
+                            peel_dir = peel_dir / norm_peel
+                        else:
+                            peel_dir = np.array([0.0, 1.0, 0.0], dtype=float)
+
+                        drone.peel_off_timer = 2.5
+                        drone.peel_off_dir = peel_dir
 
         # Promote new leader
         new_leader.is_leader = True
         new_leader.tier = TIER_LEADER
         new_leader.status = "PROMOTED_LEADER"
         new_leader.lost_link = False
+        new_leader.promotion_timer = 1.5
+
+        # Notify active brain hook of succession
+        if hasattr(self, "brain") and hasattr(self.brain, "on_succession"):
+            self.brain.on_succession(old_leader, new_leader)
+
         return new_leader
 
     # ==========================================================================

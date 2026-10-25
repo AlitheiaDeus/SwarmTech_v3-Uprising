@@ -42,11 +42,22 @@ class LeaderFollowerBrain(BaseBrain):
         self.formation_mode: str = "ECHELON_ESCORT"  # ECHELON_ESCORT, NATURAL_FLOCK, ORBIT_VORTEX, PERIMETER_PATROL
         self.formation_heading: float = 0.0
         self.heading_initialized: bool = False
+        self.assigned_slots: Dict[int, int] = {}
 
     def reset(self) -> None:
         self.last_heartbeat_broadcast = -1.0
         self.formation_heading = 0.0
         self.heading_initialized = False
+        self.assigned_slots.clear()
+
+    def on_succession(self, old_leader: Optional[Drone], new_leader: Drone) -> None:
+        """Deconflict slot assignments during leadership transitions (TKT-15).
+        Transfers the promoted leader's vacated slot to the demoted leader
+        so existing followers maintain wing affinity without crossing."""
+        if new_leader.id in self.assigned_slots:
+            vacated_slot = self.assigned_slots.pop(new_leader.id)
+            if old_leader is not None and not old_leader.crashed:
+                self.assigned_slots[old_leader.id] = vacated_slot
 
     # ==========================================================================
     # 1. Radio Comms (10 Hz Star Broadcast) & LKP Failsafe
@@ -101,8 +112,16 @@ class LeaderFollowerBrain(BaseBrain):
 
             # 1. Leader guidance: steer toward global mission target
             if drone.is_leader:
+                # Smooth acceleration ramp if newly promoted to give retiring leader corridor clearance
+                if getattr(drone, "promotion_timer", 0.0) > 0.0:
+                    drone.promotion_timer = max(0.0, drone.promotion_timer - dt)
+                    ramp = 1.0 - (drone.promotion_timer / 1.5)
+                    leader_speed = 7.0 + (V_CRUISE - 7.0) * ramp
+                else:
+                    leader_speed = V_CRUISE
+
                 accs[drone.id] = self._steer_toward(
-                    drone.pos, drone.vel, self.sim.target_pos, max_speed=V_CRUISE
+                    drone.pos, drone.vel, self.sim.target_pos, max_speed=leader_speed
                 )
                 continue
 
@@ -113,7 +132,38 @@ class LeaderFollowerBrain(BaseBrain):
                 )
                 continue
 
-            # 3. Normal active follower formation guidance
+            # 3. Lateral Peel-Off Corridor Guidance (Anti-Jousting)
+            if getattr(drone, "peel_off_timer", 0.0) > 0.0 and current_leader is not None:
+                drone.peel_off_timer = max(0.0, drone.peel_off_timer - dt)
+                heading = np.array([math.cos(self.formation_heading), math.sin(self.formation_heading), 0.0], dtype=float)
+                rel_to_leader = drone.pos - current_leader.pos
+                long_dist = float(np.dot(rel_to_leader, heading))
+
+                # Once drone has passed longitudinally behind the new leader, the jousting risk is over
+                if long_dist < -2.0:
+                    drone.peel_off_timer = 0.0
+                else:
+                    # Lateral yield push away from flight corridor
+                    v_peel_target = drone.peel_off_dir * 8.0
+                    a_peel_lat = (v_peel_target - drone.vel) * 3.0
+
+                    # Vertical corridor separation (step down 1.5m below leader)
+                    target_z = max(1.0, current_leader.pos[2] - 1.5)
+                    z_err = target_z - drone.pos[2]
+                    a_peel_z = np.clip(z_err * 3.0 - drone.vel[2] * 2.0, -8.0, 8.0)
+
+                    # Longitudinal forward speed damping so leader passes cleanly
+                    v_long = float(np.dot(drone.vel, heading))
+                    a_peel_long = -v_long * 2.0 * heading
+
+                    accs[drone.id] = np.array([
+                        a_peel_lat[0] + a_peel_long[0],
+                        a_peel_lat[1] + a_peel_long[1],
+                        a_peel_z
+                    ], dtype=float)
+                    continue
+
+            # 4. Normal active follower formation guidance
             if current_leader is not None:
                 slot_pos = self._get_formation_slot(drone, current_leader)
                 accs[drone.id] = self._steer_toward(
@@ -172,10 +222,29 @@ class LeaderFollowerBrain(BaseBrain):
         living_followers = [
             d for d in self.sim.drones if not d.crashed and not d.is_leader
         ]
-        try:
-            k = living_followers.index(drone) + 1
-        except ValueError:
-            k = drone.id
+        living_ids = {d.id for d in living_followers}
+
+        # Clean up dead or promoted drones from assigned slots
+        for did in list(self.assigned_slots.keys()):
+            if did not in living_ids:
+                del self.assigned_slots[did]
+
+        # Retrieve or assign persistent deconfliction slot
+        if drone.id in self.assigned_slots:
+            k = self.assigned_slots[drone.id]
+        else:
+            used = set(self.assigned_slots.values())
+            try:
+                suggested_k = living_followers.index(drone) + 1
+            except ValueError:
+                suggested_k = 1
+            if suggested_k not in used:
+                k = suggested_k
+            else:
+                k = 1
+                while k in used:
+                    k += 1
+            self.assigned_slots[drone.id] = k
 
         if self.formation_mode == "ECHELON_ESCORT":
             heading = np.array(
