@@ -149,6 +149,15 @@ class MavlinkBridge:
             self.sim.reboot_drone(drone_id)
             return {"status": "OK", "cmd": cmd, "rebooted_id": drone_id}
 
+        elif cmd in ("REBOOT_ALL_DEAD", "RESPAWN_ALL_DEAD", "REBOOT_DEAD"):
+            revived = self.sim.reboot_all_dead()
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "revived_ids": revived,
+                "count": len(revived),
+            }
+
         elif cmd == "REBOOT_FLEET":
             self.sim.reboot_fleet()
             return {"status": "OK", "cmd": cmd, "drone_count": len(self.sim.drones)}

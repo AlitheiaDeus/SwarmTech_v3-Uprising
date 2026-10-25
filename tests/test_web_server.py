@@ -135,6 +135,15 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(ack_kill_data.get("status"), "OK")
                 self.assertTrue(self.sim.drones[0].crashed)
 
+                # Send REBOOT_ALL_DEAD command
+                cmd_reboot = {"cmd": "REBOOT_ALL_DEAD"}
+                await ws.send_str(json.dumps(cmd_reboot))
+
+                ack_reboot_data = await wait_for_ack(ws, "REBOOT_ALL_DEAD")
+                self.assertEqual(ack_reboot_data.get("status"), "OK")
+                self.assertIn(0, ack_reboot_data.get("revived_ids", []))
+                self.assertFalse(self.sim.drones[0].crashed)
+
 
 if __name__ == "__main__":
     unittest.main()

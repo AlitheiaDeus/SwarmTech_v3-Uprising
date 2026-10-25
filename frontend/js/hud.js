@@ -97,6 +97,16 @@
             }
         });
 
+        setupBtn('btn-respawn-dead', () => {
+            const deadCount = deadDroneIds.size;
+            if (deadCount > 0) {
+                logEvent('CMD', `Respawning ${deadCount} destroyed drone(s) in-place: REBOOT_ALL_DEAD`);
+                window.swarmClient?.send({ cmd: 'REBOOT_ALL_DEAD' });
+            } else {
+                logEvent('INFO', 'No destroyed casualties to respawn. Fleet 100% operational.');
+            }
+        });
+
         setupBtn('btn-reboot-fleet', () => {
             logEvent('CMD', 'Executing tactical swarm reboot: REBOOT_FLEET');
             window.swarmClient?.send({ cmd: 'REBOOT_FLEET' });

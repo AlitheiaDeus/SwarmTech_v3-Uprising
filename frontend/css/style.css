@@ -603,6 +603,34 @@ html, body {
   box-shadow: 0 0 10px rgba(0, 255, 170, 0.5);
 }
 
+.btn-respawn {
+  border-color: rgba(0, 255, 170, 0.6);
+  color: var(--neon-emerald);
+  background: rgba(0, 255, 170, 0.08);
+}
+
+.btn-respawn:hover {
+  background: rgba(0, 255, 170, 0.25);
+  border-color: var(--neon-emerald);
+  box-shadow: 0 0 12px rgba(0, 255, 170, 0.6);
+}
+
+.btn-full-reset {
+  margin-top: 8px;
+  width: 100%;
+  border-color: rgba(255, 184, 0, 0.35);
+  color: var(--neon-amber);
+  background: rgba(255, 184, 0, 0.05);
+  font-size: 9px;
+  letter-spacing: 0.8px;
+}
+
+.btn-full-reset:hover {
+  background: rgba(255, 184, 0, 0.2);
+  border-color: var(--neon-amber);
+  box-shadow: 0 0 10px rgba(255, 184, 0, 0.5);
+}
+
 /* ==============================================================================
    Bottom Tactical Telemetry Event Feed
    ============================================================================== */

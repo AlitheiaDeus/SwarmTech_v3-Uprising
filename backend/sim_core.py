@@ -709,6 +709,33 @@ class SwarmSimulator:
                 drone.reset_state(spawn_pos, is_leader=False)
                 break
 
+    def reboot_all_dead(self) -> List[int]:
+        """Reboot and revive all crashed casualties in-place
+        without resetting surviving drones, simulation clock, or active targets."""
+        revived_ids: List[int] = []
+        crashed_drones = [d for d in self.drones if d.crashed]
+        if not crashed_drones:
+            return revived_ids
+
+        has_living_leader = any(d.is_leader and not d.crashed for d in self.drones)
+        ref_pos = self.leader.pos if has_living_leader and self.leader is not None else np.array([0.0, 0.0, 20.0])
+
+        for i, drone in enumerate(crashed_drones):
+            # If no living leader exists in the fleet, promote the first revived drone to flagship
+            make_leader = (not has_living_leader and i == 0)
+            if make_leader:
+                spawn_pos = np.copy(self.target_pos) if self.target_pos is not None else np.array([0.0, 0.0, 20.0])
+                drone.reset_state(spawn_pos, is_leader=True)
+                has_living_leader = True
+            else:
+                spawn_pos = ref_pos + np.array([-15.0 - (drone.id * 2.0), 0.0, 5.0])
+                drone.reset_state(spawn_pos, is_leader=False)
+
+            drone.status = "PROMOTED_LEADER" if drone.is_leader else "ACTIVE"
+            revived_ids.append(drone.id)
+
+        return revived_ids
+
     def reboot_fleet(self) -> None:
         """Reset and reboot all drones back to nominal starting states."""
         self._init_fleet(len(self.drones))

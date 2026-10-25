@@ -263,6 +263,49 @@ class TestSimCore(unittest.TestCase):
         self.assertIn("drones", snapshot)
         self.assertEqual(len(snapshot["drones"]), 6)
 
+    def test_reboot_all_dead(self):
+        """Verify reboot_all_dead revives crashed drones without resetting survivors or clock."""
+        # Advance simulation time
+        for _ in range(20):
+            self.sim.step()
+        sim_time_before = self.sim.sim_time
+        self.assertGreater(sim_time_before, 0.0)
+
+        # Kill 2 escort drones (#2, #4)
+        self.sim.kill_drone(2)
+        self.sim.kill_drone(4)
+        self.assertTrue(self.sim.drones[2].crashed)
+        self.assertTrue(self.sim.drones[4].crashed)
+        self.assertFalse(self.sim.drones[0].crashed)
+        self.assertFalse(self.sim.drones[1].crashed)
+
+        # Position of Drone #0 (surviving leader) before reboot
+        leader_pos_before = np.copy(self.sim.drones[0].pos)
+
+        # Execute reboot_all_dead
+        revived = self.sim.reboot_all_dead()
+        self.assertEqual(sorted(revived), [2, 4])
+
+        # Dead drones should now be active and not crashed
+        self.assertFalse(self.sim.drones[2].crashed)
+        self.assertFalse(self.sim.drones[4].crashed)
+        self.assertEqual(self.sim.drones[2].status, "ACTIVE")
+        self.assertEqual(self.sim.drones[4].status, "ACTIVE")
+
+        # Living drones remain undisturbed
+        np.testing.assert_allclose(self.sim.drones[0].pos, leader_pos_before)
+        self.assertFalse(self.sim.drones[0].crashed)
+        self.assertTrue(self.sim.drones[0].is_leader)
+
+        # Sim clock was NOT reset
+        self.assertEqual(self.sim.sim_time, sim_time_before)
+
+        # Step sim forward to ensure renewed flight without error
+        for _ in range(10):
+            self.sim.step()
+            for d in self.sim.drones:
+                self.assertFalse(np.isnan(d.pos).any())
+
 
 if __name__ == "__main__":
     unittest.main()
