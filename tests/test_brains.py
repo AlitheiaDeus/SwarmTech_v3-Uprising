@@ -221,6 +221,32 @@ class TestBrains(unittest.TestCase):
             current_slot = brain._get_formation_slot(follower, self.sim.leader)
             np.testing.assert_allclose(current_slot, initial_slots[follower.id], atol=1e-5)
 
+    def test_echelon_heading_tracks_during_target_patrol(self):
+        """Verify echelon heading does not freeze when following a moving auto-patrol target,
+        even when within 8.0m of the target beacon."""
+        brain: LeaderFollowerBrain = self.sim.brain
+        leader = self.sim.leader
+
+        # Initial heading along +X
+        self.sim.target_pos = np.array([50.0, 0.0, 20.0], dtype=float)
+        leader.pos = np.array([45.0, 0.0, 20.0], dtype=float)
+        leader.vel = np.array([6.0, 0.0, 0.0], dtype=float)
+        self.sim.step()
+        self.assertAlmostEqual(brain.formation_heading, 0.0, places=2)
+
+        # Now engage auto-patrol and simulate leader turning toward +Y
+        self.sim.patrol_active = True
+        # Target is close (dist = 3.0m < FREEZE_DIST 8.0m)
+        self.sim.target_pos = np.array([45.0, 3.0, 20.0], dtype=float)
+        leader.vel = np.array([0.0, 6.0, 0.0], dtype=float)
+
+        # Step simulation several times
+        for _ in range(10):
+            self.sim.step()
+
+        # Heading MUST have rotated towards +Y (pi/2) and NOT remained frozen at 0.0!
+        self.assertGreater(brain.formation_heading, 0.05)
+
 
 if __name__ == "__main__":
     unittest.main()

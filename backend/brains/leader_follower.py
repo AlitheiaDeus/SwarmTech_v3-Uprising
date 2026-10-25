@@ -145,17 +145,26 @@ class LeaderFollowerBrain(BaseBrain):
                 self.heading_initialized = True
             return
 
-        # Anti-jitter freeze: when leader decelerates/reverses near target or slows down
-        if speed_xy < FREEZE_SPEED or dist_to_target < FREEZE_DIST:
+        patrol_active = getattr(self.sim, "patrol_active", False)
+
+        # Anti-jitter freeze: when leader decelerates/reverses near stationary target or slows down
+        if not patrol_active and (speed_xy < FREEZE_SPEED or dist_to_target < FREEZE_DIST):
             # Freeze heading at last stable cruising angle
             return
 
-        # Cruising: target heading follows instantaneous velocity vector
-        target_heading = math.atan2(leader.vel[1], leader.vel[0])
+        # Cruising: target heading follows instantaneous velocity vector,
+        # or points towards target beacon if leader slows down in transit
+        if speed_xy >= FREEZE_SPEED:
+            target_heading = math.atan2(leader.vel[1], leader.vel[0])
+        elif dist_to_target > 1.0:
+            target_heading = math.atan2(to_target[1], to_target[0])
+        else:
+            return
 
-        # Apply bounded slew filter (<= 45 deg/s)
+        # Apply bounded slew filter (<= 45 deg/s in standard cruise, <= 60 deg/s in patrol pursuit)
+        effective_slew_rate = math.radians(60.0) if patrol_active else MAX_SLEW_RATE
         yaw_diff = (target_heading - self.formation_heading + math.pi) % (2.0 * math.pi) - math.pi
-        max_step = MAX_SLEW_RATE * dt
+        max_step = effective_slew_rate * dt
         slew = float(np.clip(yaw_diff, -max_step, max_step))
         self.formation_heading = (self.formation_heading + slew + math.pi) % (2.0 * math.pi) - math.pi
 

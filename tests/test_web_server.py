@@ -182,6 +182,21 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(ack_patrol.get("patrol_active"))
                 self.assertTrue(self.sim.patrol_active)
 
+    async def test_sim_loop_fps_pacing(self):
+        """Verify simulation ticker loop maintains locked ~60 FPS pacing without 30 FPS quantum drop."""
+        import time
+        start_time = time.perf_counter()
+        initial_frames = self.server.frames_broadcast
+        # Wait 0.4 seconds
+        await asyncio.sleep(0.4)
+        elapsed = time.perf_counter() - start_time
+        frames = self.server.frames_broadcast - initial_frames
+
+        fps = frames / elapsed
+        # With default 15.6ms sleep jitter, FPS dropped to ~32 FPS.
+        # With 1ms WinMM timer, FPS must be >= 50 FPS.
+        self.assertGreaterEqual(fps, 45.0, f"Expected >= 45 FPS, got {fps:.1f} FPS")
+
 
 if __name__ == "__main__":
     unittest.main()

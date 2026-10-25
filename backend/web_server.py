@@ -6,6 +6,7 @@ and streaming 60 FPS JSON simulation state frames over WebSocket (/ws).
 
 from __future__ import annotations
 import asyncio
+import ctypes
 import json
 import logging
 import os
@@ -253,10 +254,9 @@ class SwarmWebServer:
         """Core async loop stepping the simulation at locked 60 FPS and
         broadcasting JSON frames to all connected GCS clients."""
         interval = self.dt
+        next_tick = time.perf_counter()
 
         while self.is_running:
-            t_start = time.perf_counter()
-
             # Advance simulation world
             self.sim.step(interval)
 
@@ -285,13 +285,26 @@ class SwarmWebServer:
 
             self.frames_broadcast += 1
 
-            # Sleep remaining time to maintain target FPS
-            elapsed = time.perf_counter() - t_start
-            sleep_time = max(0.001, interval - elapsed)
-            await asyncio.sleep(sleep_time)
+            # Precision frame pacing with zero clock drift
+            next_tick += interval
+            now = time.perf_counter()
+            sleep_time = next_tick - now
+            if sleep_time > 0.001:
+                await asyncio.sleep(sleep_time)
+            else:
+                if sleep_time < -interval:
+                    next_tick = now  # Reset deadline if running significantly behind
+                await asyncio.sleep(0)  # Yield control to event loop
 
     async def start(self) -> None:
         """Start web server and simulation ticker loop."""
+        # Boost Windows multimedia timer resolution to 1ms
+        if sys.platform == "win32":
+            try:
+                ctypes.windll.winmm.timeBeginPeriod(1)
+            except Exception as e:
+                logger.warning(f"Could not enable Windows 1ms timer resolution: {e}")
+
         self.is_running = True
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
@@ -330,6 +343,13 @@ class SwarmWebServer:
         # Close network bridge if attached
         if self.bridge is not None:
             self.bridge.close()
+
+        # Reset Windows multimedia timer resolution
+        if sys.platform == "win32":
+            try:
+                ctypes.windll.winmm.timeEndPeriod(1)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

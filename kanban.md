@@ -8,6 +8,8 @@
 kanban
   reported["Reported (Triage / Ideas)"]
     pln3["[PLN-03] Simulating Packet Loss & RF Link Degradation"]
+    pln4["[PLN-04] Windows 15.6ms Sleep Quantization & Drone Speed Anomaly"]
+    pln5["[PLN-05] Natural Boids Flocking Architecture: True Reynolds vs Dynamic Escort"]
     idea1["Dynamic Wind Gust Vector Field"]
     idea2["Gamepad / Joystick Manual Drone Override"]
   todo["Todo (Planned & Scoped)"]
@@ -17,6 +19,7 @@ kanban
     tkt11["[TKT-11] Decentralized Consensus Formations in Gossip Mesh"]@{ priority: 'High' }
   in_progress["In Progress"]
   completed["Completed (Fresh / Review)"]
+    tkt18["[TKT-18] Sim Pacing (1ms WinMM Timer) & Dynamic Echelon Heading Tracking"]@{ priority: 'Very High' }
     tkt12["[TKT-12] Dynamic Target Waypoint Auto-Patrol Loop"]@{ priority: 'Medium' }
     tkt14["[TKT-14] Battlefield Salvage: Clear Crashed Drone Wreckage"]@{ priority: 'Low' }
     tkt7["[TKT-07] Base Reinforcement Launch & Swarm Rejoin State Machine"]@{ priority: 'High' }
@@ -58,9 +61,12 @@ kanban
 | **TKT-15** | Autonomic Succession Deconfliction: Anti-Jousting Corridors (`sim_core.py`, `leader_follower.py`) | **Very High** | **Planned** | - Retiring leader and promoted successor must not accelerate along reciprocal paths.<br>- Lateral peel-off corridor applied during role transition ($\mathbf{v}_{\text{peel}} \perp \mathbf{v}_{\text{leader}}$).<br>- Zero Zone 4 prop-clashes when succession triggers at standard $6\text{m}$ slot spacing across Echelon, Boids, and Perimeter formations. | `.\run.ps1 -UnitTest` | When leader demotion or role swap triggers, retiring leader reverses toward follower slot while successor accelerates forward toward target, causing a head-on collision at $24\text{ m/s}$ closing speed. Fix: implement lateral yield/peel-off corridor and arrival smoothing during rank transitions. |
 | **TKT-16** | Fiber-Optic Telemetry Tether: Uplink Loss, Loiter, & Autonomous RTB (`sim_core.py`, `hud.js`) | **High** | **Planned** | - Rescope tether from physical power line to hardline fiber-optic telemetry/C2 umbilical.<br>- Severance (`CUT_TETHER` or cable clash) triggers `UPLINK_SEVERED`, not drone motor failure.<br>- Configurable failsafe behavior: Station-Hold (Loiter) or autonomous RTB back to base pad $(0, 0, 0.5\text{m})$.<br>- Swarm followers continue mission or loiter; rejoining tethered drone re-establishes uplink. | `.\run.ps1 -UnitTest` | Settles PLN-01. Micro-fiber optic spools in counter-EW warfare carry unjammable C2 data. Drone 0 does not lose motor power when severed; it loses GCS command uplink. Implement loiter and autonomous RTB state machines. |
 | **TKT-17** | Tri-Mode Swarm Architecture: Tethered Relay, Wireless Star, & P2P Mesh (`sim_core.py`, `app.js`, `hud.js`) | **High** | **Planned** | - 3 distinct Swarm Brain / Comms modes on GCS:<br>  1. `TETHERED_RELAY` (Fiber-optic hardline to Drone 0, followers track relay via radio; tether visible).<br>  2. `LEADER_FOLLOWER` (Untethered wireless RF star; tether hidden).<br>  3. `GOSSIP_CONSENSUS` (Untethered wireless P2P mesh; tether hidden).<br>- In Gossip mode, target clicks inject only to drones within GCS radio range ($\le 120\text{m}$); multi-hop gossip echo wave visibly ripples across mesh until quorum. | `.\run.ps1 -UnitTest` | Settles PLN-02. Wireless modes should not render a phantom ground tether. In Gossip mesh, realistic multi-hop RF demonstration requires injecting target only into nodes within base radio range, making the yellow propagation echo wave visually observable. |
+| **TKT-18** | Simulation Tick Pacing (1ms WinMM Timer) & Dynamic Echelon Heading Tracking (`web_server.py`, `leader_follower.py`) | **Very High** | **Review** | - Call `ctypes.windll.winmm.timeBeginPeriod(1)` on Windows on startup (and cleanup `timeEndPeriod(1)`) so `asyncio.sleep` timer resolution is 1ms, eliminating the 15.6ms quantum cliff. Sim runs at locked 60 FPS (1.0x real-time) whether 1 drone or 10 drones are simulated.<br>- Disengage `FREEZE_DIST` heading lock when target is in dynamic motion (`target_patrol_active` or $\|\mathbf{v}_{\text{target}}\| > 0.2\text{m/s}$), allowing Echelon formation to reorient smoothly along pursuit vector during target auto-patrol.<br>- Unit tests verify smooth heading rotation during target motion and timer initialization. | `.\run.ps1 -UnitTest` | At 60 FPS ($16.67\text{ms}$ interval), Windows 15.625ms default sleep quantum causes single-drone loops to oversleep to 31.25ms (32 FPS = 0.5x speed), while 8+ drones reduce remaining sleep below 15.6ms to trigger 1-tick wakeups (64 FPS = 1.0x speed). Implemented `timeBeginPeriod(1)` on Windows startup, precision deadline frame pacing, and disengaged stationary arrival heading freeze when `patrol_active` is True. Added automated unit tests in `tests/test_brains.py` and `tests/test_web_server.py`. 39/39 unit tests pass. |
 | **PLN-01** | Operator Policy: Tether Cut Dynamics (`sim_core.py`) | **Low** | **Settled** | Scoped and resolved into **`[TKT-16]`**. | N/A (Architecture) | Settled as fiber-optic telemetry/C2 umbilical with Station-Hold / Autonomous RTB failsafes. |
 | **PLN-02** | Gossip Mode Tether & Gateway Semantics (`sim_core.py`) | **Low** | **Settled** | Scoped and resolved into **`[TKT-17]`**. | N/A (Architecture) | Settled: Tether is hidden in wireless modes; GCS radio range limits initial target injection in Gossip mode to visually demonstrate multi-hop mesh propagation. |
 | **PLN-03** | Simulating Packet Loss & RF Link Degradation (`leader_follower.py`, `gossip_consensus.py`, `hud.js`) | **Low** | **Discussion** | - Model RF packet drop dynamics: uniform drop vs distance-squared path loss vs operator-controlled jamming.<br>- Add live packet loss slider (0%–50%) and link quality telemetry to test LKP failover & gossip quorum resilience. | N/A (Architecture) | Currently packet loss is a fixed 1% uniform drop when enabled. Options: (1) Distance-dependent drop probability $P_{\text{loss}}(d) = 1 - e^{-(d/R_0)^2}$; (2) Operator RF degradation / jamming slider on GCS HUD; (3) Per-drone packet reception rate and signal quality telemetry bars. |
+| **PLN-04** | Windows 15.6ms Sleep Quantization & Drone Speed Anomaly (`web_server.py`) | **High** | **Settled** | Scoped and resolved into **`[TKT-18]`**. | `.\run.ps1 -UnitTest` | Settled: Addressed in TKT-18 via Windows multimedia 1ms timer (`timeBeginPeriod(1)`) and sim tick pacing. |
+| **PLN-05** | Natural Boids Flocking Architecture: True Reynolds vs Dynamic Escort (`leader_follower.py`, `brains/`) | **Medium** | **Discussion** | - Research & specify true Reynolds boid flocking rules (separation, velocity alignment, centroid cohesion) vs leader-anchored dynamic escort formations.<br>- Address heading-relative slot rotation vs organic autonomous flocking dynamics. | N/A (Architecture) | Currently `NATURAL_FLOCK` in `LeaderFollowerBrain` uses hardcoded Cartesian $(X, Y)$ world offsets, causing the formation to glide rigidly without turning or dynamic flocking. Options: (1) True Reynolds boids flocking vectors with leader as weighted attractant; (2) Heading-oriented dynamic escort envelope. |
 
 ---
 
@@ -72,19 +78,24 @@ kanban
 
 ---
 
-## 4. Recommended Implementation Sequence for Next Session (Pinned)
+## 4. Recommended Implementation Sequence (Pinned Roadmap)
 
-1. **Step 1: Battlefield Salvage & Cleanup (`[TKT-14]`)** *(Immediate Next Task)*:
-   - Implement `clear_crashed_wreckage()` in `sim_core.py` to purge dead/crashed drones from `sim.drones`.
-   - Add `CLEAR_WRECKAGE` WebSocket (`web_server.py`) and UDP (`mavlink_bridge.py`) commands.
-   - In `app.js`, dispose Three.js meshes, rotors, drop-lines, ground shadows, and 3D badges for vanished IDs.
-   - In `hud.js`, remove dead telemetry cards and add `[⌫ CLEAR WRECKAGE]` button in Casualty Lab.
-2. **Step 2: Decentralized Swarm Geometries (`[TKT-11]`)** *(High Priority)*:
-   - Implement consensus-based virtual anchor slot offsets in `GossipConsensusBrain` so P2P mesh forms structured perimeter sentry rings and grids instead of clumping into a single point.
-3. **Step 3: Continuous Dynamic Flight Patrol (`[TKT-12]`)** *(Medium Priority)*:
-   - Add `TOGGLE_TARGET_PATROL` command and backend parametric 3D waypoint auto-patrol path generator ($X(t), Y(t), Z(t)$ with altitude variation $Z=15\text{m}-40\text{m}$) for hands-free observation of dynamic swarm pursuit.
-4. **Step 4: Contested RF & Packet Loss Simulation (`[PLN-03]`)**:
+### Current Status
+* **`[TKT-18] Simulation Tick Pacing (1ms WinMM Timer) & Dynamic Echelon Heading Tracking`** *(Completed / In Review)*:
+  - Enabled 1ms Windows multimedia timer resolution (`timeBeginPeriod(1)` / `timeEndPeriod(1)`) eliminating 15.6ms sleep quantization and the 32 FPS quantum cliff.
+  - Implemented zero-drift precision frame pacing in `web_server.py`, locking the simulation loop to 60 FPS under all fleet loads.
+  - Disengaged `FREEZE_DIST` heading lock during `patrol_active` in `leader_follower.py`, allowing the Echelon formation to smoothly bank and track along dynamic patrol trajectories. 39/39 unit tests pass.
+
+### Post-Dinner Resumption Sequence (Next Session)
+1. **Step 1: Succession Deconfliction (`[TKT-15]`)** *(Immediate Priority - Bug Fix)*:
+   - Implement lateral peel-off corridor ($\mathbf{v}_{\text{peel}} \perp \mathbf{v}_{\text{leader}}$) during leadership promotion/demotion so retiring leader and promoted successor never collide head-on in Echelon, Boids, or Perimeter.
+2. **Step 2: Fiber-Optic Telemetry Tether & Failsafes (`[TKT-16]`)** *(High Priority)*:
+   - Rescope tether from physical power line to hardline fiber-optic telemetry/C2 umbilical. Severance means uplink loss (not crash). Drone 0 enters Station-Hold (Loiter) or autonomous RTB back to base pad. Resolves `PLN-01`.
+3. **Step 3: Tri-Mode Architecture & Realistic RF Uplink (`[TKT-17]`)** *(High Priority)*:
+   - Explicitly support 3 Swarm Modes: (1) `TETHERED_RELAY` (tether visible), (2) `LEADER_FOLLOWER` (tether hidden), (3) `GOSSIP_CONSENSUS` (tether hidden). In Gossip mode, clicks inject target only to drones within GCS radio range ($\le 120\text{m}$), demonstrating visible multi-hop mesh propagation. Resolves `PLN-02`.
+4. **Step 4: Decentralized Swarm Geometries (`[TKT-11]`)** *(High Priority)*:
+   - Implement consensus-based virtual anchor slot offsets in `GossipConsensusBrain` so P2P mesh forms structured perimeter rings and grids instead of clumping into a single point.
+5. **Step 5: Natural Boids Flocking Architecture (`[PLN-05]`)** *(Medium Priority)*:
+   - Refactor `NATURAL_FLOCK` into true Reynolds boid rules (separation, velocity alignment, centroid cohesion) with leader goal attraction, replacing rigid Cartesian world offsets.
+6. **Step 6: Contested RF & Packet Loss Simulation (`[PLN-03]`)** *(Low Priority)*:
    - Model distance-dependent path loss and operator RF degradation / jamming slider (0%–50%) on GCS HUD to test LKP failover & gossip quorum resilience.
-5. **Step 5: Architectural Decisions & System Policies (`[PLN-01]`, `[PLN-02]`)**:
-   - `[PLN-01]`: Settle tether severance behavior (hard power loss vs 2-minute emergency battery RTB).
-   - `[PLN-02]`: Settle Gossip mode tether visibility (untethered mesh vs stationary GCS gateway).
