@@ -561,7 +561,7 @@ class SwarmSimulator:
         """Reynolds Arrival Steering behavior: decelerates smoothly as target is approached."""
         offset = target_pos - current_pos
         dist = float(np.linalg.norm(offset))
-        if dist < 0.01:
+        if dist < 0.25:  # 0.25m arrival deadband stops micro-hunting/jitter
             return -current_vel * 3.0
 
         if dist < arrival_radius:

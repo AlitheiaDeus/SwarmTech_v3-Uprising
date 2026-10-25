@@ -111,6 +111,81 @@ class TestBrains(unittest.TestCase):
         self.assertIn("target_seq", snapshot_gossip["brain_telemetry"])
         self.assertIn("consensus_reached", snapshot_gossip["brain_telemetry"])
 
+    def test_echelon_heading_freeze_near_target(self):
+        """Verify formation heading freezes when leader is within 8.0m of target."""
+        brain: LeaderFollowerBrain = self.sim.brain
+        leader = self.sim.leader
+
+        # Position leader 20m from target, moving towards +X at 10 m/s
+        self.sim.target_pos = np.array([100.0, 0.0, 20.0], dtype=float)
+        leader.pos = np.array([80.0, 0.0, 20.0], dtype=float)
+        leader.vel = np.array([10.0, 0.0, 0.0], dtype=float)
+
+        # Advance 1 step: heading establishes as 0.0 (along +X)
+        self.sim.step()
+        self.assertAlmostEqual(brain.formation_heading, 0.0, places=2)
+
+        # Now place leader within 4.0m of target (distance < 8.0m FREEZE_DIST)
+        leader.pos = np.array([96.0, 0.0, 20.0], dtype=float)
+        # Simulate micro-reversal / overshoot: vel points backwards along -X
+        leader.vel = np.array([-2.0, 0.0, 0.0], dtype=float)
+
+        self.sim.step()
+        # Formation heading MUST remain frozen at 0.0 and NOT flip 180 degrees
+        self.assertAlmostEqual(brain.formation_heading, 0.0, places=2)
+
+    def test_echelon_heading_freeze_at_low_speed(self):
+        """Verify formation heading freezes when leader speed drops below 1.5 m/s."""
+        brain: LeaderFollowerBrain = self.sim.brain
+        leader = self.sim.leader
+
+        # Position leader far from target (50m) moving at cruise speed
+        self.sim.target_pos = np.array([100.0, 0.0, 20.0], dtype=float)
+        leader.pos = np.array([50.0, 0.0, 20.0], dtype=float)
+        leader.vel = np.array([10.0, 0.0, 0.0], dtype=float)
+        self.sim.step()
+        self.assertAlmostEqual(brain.formation_heading, 0.0, places=2)
+
+        # Now leader decelerates to 0.5 m/s (below FREEZE_SPEED 1.5 m/s) and veers +Y
+        leader.vel = np.array([0.0, 0.5, 0.0], dtype=float)
+        self.sim.step()
+        # Formation heading must remain frozen at 0.0
+        self.assertAlmostEqual(brain.formation_heading, 0.0, places=2)
+
+    def test_echelon_heading_slew_rate_limit(self):
+        """Verify heading change per step is strictly bounded by MAX_SLEW_RATE (45 deg/s)."""
+        brain: LeaderFollowerBrain = self.sim.brain
+        leader = self.sim.leader
+
+        self.sim.target_pos = np.array([100.0, 0.0, 20.0], dtype=float)
+        leader.pos = np.array([20.0, 0.0, 20.0], dtype=float)
+        leader.vel = np.array([10.0, 0.0, 0.0], dtype=float)
+        self.sim.step()
+        self.assertAlmostEqual(brain.formation_heading, 0.0, places=2)
+
+        # Leader suddenly banks 90 degrees (+Y) at full cruise speed
+        leader.vel = np.array([0.0, 10.0, 0.0], dtype=float)
+        dt = DT
+        self.sim.step()
+
+        # Max allowed delta is (pi / 4.0) * dt + slight float tolerance
+        max_allowed_delta = (np.pi / 4.0) * dt + 1e-4
+        delta_heading = abs(brain.formation_heading - 0.0)
+        self.assertLessEqual(delta_heading, max_allowed_delta)
+
+    def test_steer_toward_arrival_deadband(self):
+        """Verify 0.25m arrival deadband outputs pure damping to prevent micro-hunting."""
+        pos = np.array([10.0, 10.0, 20.0], dtype=float)
+        vel = np.array([1.0, -0.5, 0.0], dtype=float)
+
+        # Target within 0.1m (< 0.25m deadband)
+        target = np.array([10.05, 10.05, 20.0], dtype=float)
+        acc = LeaderFollowerBrain._steer_toward(pos, vel, target, max_speed=12.0)
+
+        # Output must be pure velocity damping (-vel * 3.0)
+        expected_acc = -vel * 3.0
+        np.testing.assert_allclose(acc, expected_acc)
+
 
 if __name__ == "__main__":
     unittest.main()
