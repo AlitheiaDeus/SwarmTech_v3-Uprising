@@ -206,9 +206,15 @@ class SwarmWebServer:
             self.sim.reboot_fleet()
             return {"status": "OK", "cmd": cmd, "drone_count": len(self.sim.drones)}
 
-        elif cmd == "CUT_TETHER":
+        elif cmd in ("CUT_TETHER", "JETTISON_TETHER", "SEVER_TETHER"):
             self.sim.cut_tether()
-            return {"status": "OK", "cmd": cmd, "tether_severed": self.sim.tether_severed}
+            two_ic = self.sim.get_2ic()
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "tether_severed": self.sim.tether_severed,
+                "two_ic_id": two_ic.id if two_ic else None,
+            }
 
         elif cmd == "SET_BRAIN":
             name = cmd_dict.get("brain", "LEADER_FOLLOWER")

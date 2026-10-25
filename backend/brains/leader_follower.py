@@ -132,6 +132,40 @@ class LeaderFollowerBrain(BaseBrain):
                 )
                 continue
 
+            # 2b. Breakaway Dive & Cable Jettison Guidance (TKT-16)
+            if getattr(drone, "jettison_timer", 0.0) > 0.0:
+                # Vertical dive corridor: step down 4.0m below formation plane
+                lead_z = current_leader.pos[2] if current_leader is not None else drone.pos[2]
+                target_z = max(1.0, lead_z - 4.0)
+                desired_vz = float(np.clip(3.0 * (target_z - drone.pos[2]), -6.0, 2.0))
+                a_dive_z = float(np.clip(4.0 * (desired_vz - drone.vel[2]), -15.0, 8.0))
+
+                # Lateral push away from formation
+                heading = np.array([math.cos(self.formation_heading), math.sin(self.formation_heading), 0.0], dtype=float)
+                peel_dir = getattr(drone, "peel_off_dir", np.zeros(3, dtype=float))
+                if float(np.linalg.norm(peel_dir)) < 0.01:
+                    peel_dir = np.array([-heading[1], heading[0], 0.0], dtype=float)
+                v_peel_target = peel_dir * 6.0
+                a_peel_lat = (v_peel_target - drone.vel) * 2.0
+
+                # Longitudinal forward speed braking
+                v_long = float(np.dot(drone.vel, heading))
+                a_brake_long = -v_long * 2.0 * heading
+
+                accs[drone.id] = np.array([
+                    a_peel_lat[0] + a_brake_long[0],
+                    a_peel_lat[1] + a_brake_long[1],
+                    a_dive_z
+                ], dtype=float)
+                continue
+
+            # 2c. Tether Failsafe Policy: Autonomous RTB override if configured
+            if getattr(drone, "tether_failsafe_policy", "REJOIN") == "RTB" and getattr(drone, "tether_lost", False):
+                accs[drone.id] = self._steer_toward(
+                    drone.pos, drone.vel, np.array([0.0, 0.0, 25.0], dtype=float), max_speed=V_CRUISE
+                )
+                continue
+
             # 3. Lateral Peel-Off Corridor Guidance (Anti-Jousting)
             if getattr(drone, "peel_off_timer", 0.0) > 0.0 and current_leader is not None:
                 drone.peel_off_timer = max(0.0, drone.peel_off_timer - dt)

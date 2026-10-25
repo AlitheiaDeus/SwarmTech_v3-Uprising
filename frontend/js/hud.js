@@ -14,10 +14,12 @@
     let currentBrain = null;
     let tetherSevered = false;
     let patrolActive = false;
+    let swarmRtbActive = false;
     const deadDroneIds = new Set();
     const lostLinkIds = new Set();
     const takeoffDroneIds = new Set();
     const enrouteDroneIds = new Set();
+    const jettisonDroneIds = new Set();
 
     // DOM Elements
     let cardsContainer = null;
@@ -237,6 +239,44 @@
                     logEvent('STATUS', '3D Target Auto-Patrol Loop DISENGAGED.');
                 }
             }
+        // 4. Update Top Bar Failsafe Indicator (TKT-16)
+        const failsafePill = document.getElementById('hud-failsafe-pill');
+        const failsafeText = document.getElementById('hud-failsafe-text');
+        if (failsafePill && failsafeText) {
+            if (frame.tether && frame.tether.severed) {
+                failsafePill.classList.remove('hidden');
+                if (frame.swarm_rtb_active) {
+                    failsafePill.className = 'status-pill failsafe-pill failsafe-rtb';
+                    failsafeText.textContent = 'UPLINK LOST: DOCTRINE A SWARM RTB TO BASE ACTIVE';
+                } else if (frame.lost_link_loiter_timer !== undefined && frame.lost_link_loiter_timer > 0) {
+                    failsafePill.className = 'status-pill failsafe-pill failsafe-loiter';
+                    const leaderTwoIc = frame.two_ic_id !== null && frame.two_ic_id !== undefined ? frame.two_ic_id : 1;
+                    failsafeText.textContent = `UPLINK SEVERED: 2IC #${leaderTwoIc} IN COMMAND | DOCTRINE A LOITER: ${frame.lost_link_loiter_timer.toFixed(1)}s -> RTB`;
+                } else {
+                    failsafePill.className = 'status-pill failsafe-pill failsafe-rtb';
+                    failsafeText.textContent = 'UPLINK SEVERED: RETURNING TO BASE';
+                }
+            } else {
+                failsafePill.classList.add('hidden');
+            }
+        }
+
+        // Failsafe Event Logging
+        if (frame.tether && frame.tether.severed && !tetherSevered) {
+            tetherSevered = true;
+            const twoIcStr = frame.two_ic_id !== null && frame.two_ic_id !== undefined ? `#${frame.two_ic_id}` : '#1';
+            logEvent('FAILSAFE', `Tactical umbilical severed! 2IC ${twoIcStr} assumed command. Drone #0 breakaway dive initiated.`);
+            logEvent('DOCTRINE_A', `Doctrine A engaged: Holding 30s defensive loiter before automated RTB.`);
+        } else if (frame.tether && !frame.tether.severed && tetherSevered) {
+            tetherSevered = false;
+            logEvent('STATUS', `Tactical umbilical reconnected / swarm rebooted.`);
+        }
+
+        if (frame.swarm_rtb_active && !swarmRtbActive) {
+            swarmRtbActive = true;
+            logEvent('RTB', `Doctrine A 30s loiter grace period expired. Swarm RTB initiated to Base (0, 0, 25m).`);
+        } else if (!frame.swarm_rtb_active && swarmRtbActive) {
+            swarmRtbActive = false;
         }
 
         // 5. Update Drone Telemetry Cards
@@ -295,6 +335,14 @@
                     logEvent('STATUS', `Drone #${d.id} link restored. Rejoined swarm.`);
                 }
 
+                if (d.status === 'BREAKAWAY_JETTISON' && !jettisonDroneIds.has(d.id)) {
+                    jettisonDroneIds.add(d.id);
+                    logEvent('FAILSAFE', `Drone #${d.id} executing 3D breakaway dive (ΔZ=-4m) and cable purge.`);
+                } else if (d.status !== 'BREAKAWAY_JETTISON' && jettisonDroneIds.has(d.id)) {
+                    jettisonDroneIds.delete(d.id);
+                    logEvent('STATUS', `Drone #${d.id} umbilical purge complete. Rejoining formation as unencumbered escort.`);
+                }
+
                 // Update / Build Card DOM
                 updateOrCreateDroneCard(d);
             });
@@ -326,7 +374,7 @@
         card.elBatBar.style.width = `${Math.max(0, Math.min(100, drone.battery))}%`;
 
         // Status Styling & Badges
-        card.el.classList.remove('leader-card', 'crashed-card', 'lkp-card', 'gossip-card', 'takeoff-card', 'enroute-card');
+        card.el.classList.remove('leader-card', 'crashed-card', 'lkp-card', 'gossip-card', 'takeoff-card', 'enroute-card', 'jettison-card');
         card.elRole.className = 'drone-role-badge';
 
         if (drone.crashed) {
@@ -336,11 +384,26 @@
             card.elRole.textContent = 'DESTROYED';
             card.elActionBtn.textContent = 'REBOOT';
             card.elActionBtn.className = 'card-btn-action btn-reboot';
+        } else if (drone.status === 'BREAKAWAY_JETTISON') {
+            card.el.classList.add('jettison-card');
+            card.elStatus.textContent = 'JETTISONING';
+            card.elStatus.className = 'status-tag tag-jettison';
+            card.elRole.textContent = '⏏ JETTISON';
+            card.elRole.classList.add('badge-jettison');
+            card.elActionBtn.textContent = 'KILL';
+            card.elActionBtn.className = 'card-btn-action btn-kill';
         } else if (drone.is_leader) {
             card.el.classList.add('leader-card');
             card.elStatus.textContent = 'LEADER';
             card.elStatus.className = 'status-tag tag-leader';
             card.elRole.textContent = 'FLAGSHIP';
+            card.elActionBtn.textContent = 'KILL';
+            card.elActionBtn.className = 'card-btn-action btn-kill';
+        } else if (drone.is_2ic) {
+            card.elStatus.textContent = 'ACTIVE';
+            card.elStatus.className = 'status-tag tag-active';
+            card.elRole.textContent = '2IC';
+            card.elRole.classList.add('badge-2ic');
             card.elActionBtn.textContent = 'KILL';
             card.elActionBtn.className = 'card-btn-action btn-kill';
         } else if (drone.flight_state === 'TAKEOFF') {

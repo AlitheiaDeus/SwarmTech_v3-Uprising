@@ -120,6 +120,11 @@ class Drone:
         self.peel_off_dir: np.ndarray = np.zeros(3, dtype=float)
         self.promotion_timer: float = 0.0
 
+        # Tether Failsafes & Cable Jettison (TKT-16)
+        self.jettison_timer: float = 0.0
+        self.tether_jettisoned: bool = False
+        self.tether_failsafe_policy: str = "REJOIN"  # "REJOIN" or "RTB"
+
     def reset_state(
         self,
         pos: np.ndarray,
@@ -146,6 +151,9 @@ class Drone:
         self.peel_off_timer = 0.0
         self.peel_off_dir = np.zeros(3, dtype=float)
         self.promotion_timer = 0.0
+        self.jettison_timer = 0.0
+        self.tether_jettisoned = False
+        self.tether_failsafe_policy = "REJOIN"
 
     def succession_score(self) -> int:
         """Calculate autonomic succession eligibility score: (Tier * 1000) - ID."""
@@ -169,6 +177,10 @@ class Drone:
             "battery": round(float(self.battery), 1),
             "status": self.status,
             "rotor_rpm": round(float(self.rotor_rpm), 0),
+            "jettison_timer": round(float(self.jettison_timer), 2),
+            "tether_jettisoned": self.tether_jettisoned,
+            "tether_lost": self.tether_lost,
+            "tether_failsafe_policy": self.tether_failsafe_policy,
         }
 
 
@@ -198,6 +210,11 @@ class SwarmSimulator:
         self.target_pos: np.ndarray = np.array([60.0, 40.0, 30.0], dtype=float)
         self.tether_anchor: np.ndarray = np.copy(TETHER_ANCHOR)
         self.tether_severed: bool = False
+
+        # Fleet Doctrine A (Lost-Link Failsafe Loiter & Automated RTB) (TKT-16)
+        self.lost_link_loiter_timer: float = 0.0
+        self.lost_link_policy: str = "DOCTRINE_A"
+        self.swarm_rtb_active: bool = False
 
         # Dynamic Target Auto-Patrol Loop (TKT-12)
         self.patrol_active: bool = False
@@ -229,6 +246,8 @@ class SwarmSimulator:
         """Initialize leader and followers in safe starting formation."""
         self.drones.clear()
         self.tether_severed = False
+        self.lost_link_loiter_timer = 0.0
+        self.swarm_rtb_active = False
         self._highest_drone_id = count - 1
 
         # Leader #0 positioned at (0, 0, 20)
@@ -263,6 +282,21 @@ class SwarmSimulator:
                 return drone
         return None
 
+    def get_2ic(self) -> Optional[Drone]:
+        """Dynamically determine the Second-in-Command (2IC) drone (TKT-16).
+        Highest succession score among surviving, non-leader escorts:
+        score = (Tier * 1000) - ID."""
+        candidates = [
+            d for d in self.drones
+            if not d.crashed and not d.is_leader and not d.tether_lost
+        ]
+        if not candidates:
+            candidates = [d for d in self.drones if not d.crashed and not d.is_leader]
+        if not candidates:
+            return None
+        candidates.sort(key=lambda d: d.succession_score(), reverse=True)
+        return candidates[0]
+
     # ==========================================================================
     # Step Integration Loop (60 FPS)
     # ==========================================================================
@@ -278,6 +312,26 @@ class SwarmSimulator:
             patrol_y = float(self.patrol_center[1] + self.patrol_scale[1] * math.sin(2.0 * t) * 0.75)
             patrol_z = float(max(15.0, self.patrol_center[2] + self.patrol_scale[2] * math.sin(t * 1.5)))
             self.set_target([patrol_x, patrol_y, patrol_z])
+
+        # 0b. Advance Doctrine A Lost-Link Loiter & Automated RTB Timer (TKT-16)
+        if self.tether_severed and not self.swarm_rtb_active:
+            if self.lost_link_loiter_timer > 0.0:
+                self.lost_link_loiter_timer = max(0.0, self.lost_link_loiter_timer - dt)
+                if self.lost_link_loiter_timer <= 0.0:
+                    # Loiter grace period expired: automated return to base
+                    self.swarm_rtb_active = True
+                    self.patrol_active = False
+                    self.set_target([0.0, 0.0, 25.0])
+
+        # 0c. Advance Drone Breakaway Jettison Timers (TKT-16)
+        for drone in self.drones:
+            if not drone.crashed and drone.jettison_timer > 0.0:
+                drone.jettison_timer = max(0.0, drone.jettison_timer - dt)
+                if drone.jettison_timer <= 0.0:
+                    drone.tether_jettisoned = True
+                    drone.peel_off_timer = 0.0
+                    if drone.status == "BREAKAWAY_JETTISON":
+                        drone.status = "ACTIVE"
 
         # 1. Comms & Packet Protocol from active Brain Plugin
         self.brain.update_comms(dt)
@@ -494,10 +548,20 @@ class SwarmSimulator:
                 break
 
     def _snap_tether(self, leader_drone: Drone, reason: str = "") -> None:
-        """Snap tether, cut leader primary link, and trigger autonomic succession."""
+        """Snap tether, initiate umbilical emergency breakaway dive on leader,
+        dynamically promote 2IC, and initiate Doctrine A loiter timer (TKT-16)."""
         self.tether_severed = True
         leader_drone.tether_lost = True
+        leader_drone.jettison_timer = 1.5
+        leader_drone.tether_jettisoned = False
+        leader_drone.status = "BREAKAWAY_JETTISON"
+
+        # Demote leader and promote dynamic 2IC
         self._trigger_autonomic_succession(demote_old_leader=True)
+
+        # Engage Fleet Doctrine A: 30s defensive loiter before automated RTB
+        self.lost_link_loiter_timer = 30.0
+        self.swarm_rtb_active = False
 
     def _compute_tether_avoidance(self) -> Dict[int, np.ndarray]:
         """Apply lateral repulsion when followers enter the 3.0m cable clearance envelope."""
@@ -772,7 +836,10 @@ class SwarmSimulator:
                     old_leader = drone
                     drone.is_leader = False
                     if not drone.crashed:
-                        drone.status = "ACTIVE"
+                        if drone.jettison_timer > 0.0:
+                            drone.status = "BREAKAWAY_JETTISON"
+                        else:
+                            drone.status = "ACTIVE"
                         # Lateral Peel-Off Corridor Deconfliction (TKT-15)
                         speed_xy = math.hypot(drone.vel[0], drone.vel[1])
                         if speed_xy > 0.5:
@@ -926,6 +993,8 @@ class SwarmSimulator:
     def reboot_fleet(self) -> None:
         """Reset and reboot all drones back to nominal starting states."""
         self._init_fleet(len(self.drones))
+        self.lost_link_loiter_timer = 0.0
+        self.swarm_rtb_active = False
         self.brain.reset()
 
     def cut_tether(self) -> None:
@@ -971,6 +1040,15 @@ class SwarmSimulator:
         if current_leader is not None and not self.tether_severed:
             tether_len = float(np.linalg.norm(current_leader.pos - self.tether_anchor))
 
+        two_ic = self.get_2ic()
+        two_ic_id = two_ic.id if two_ic else None
+
+        drones_list = []
+        for d in self.drones:
+            d_dict = d.to_dict()
+            d_dict["is_2ic"] = (d.id == two_ic_id and not d.is_leader and not d.crashed)
+            drones_list.append(d_dict)
+
         return {
             "sim_time": round(float(self.sim_time), 3),
             "dt": DT,
@@ -978,12 +1056,15 @@ class SwarmSimulator:
             "formation": getattr(self.brain, "formation_mode", self.formation_mode),
             "target": [round(float(v), 2) for v in self.target_pos],
             "patrol_active": self.patrol_active,
+            "two_ic_id": two_ic_id,
+            "lost_link_loiter_timer": round(max(0.0, float(self.lost_link_loiter_timer)), 1),
+            "swarm_rtb_active": self.swarm_rtb_active,
             "tether": {
                 "anchor": [round(float(v), 2) for v in self.tether_anchor],
                 "leader_id": current_leader.id if current_leader else -1,
                 "severed": self.tether_severed,
                 "length": round(tether_len, 2),
             },
-            "drones": [d.to_dict() for d in self.drones],
+            "drones": drones_list,
             "brain_telemetry": self.brain.get_telemetry_extra(),
         }

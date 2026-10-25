@@ -45,6 +45,11 @@
       <div class="status-pill">
         GPU: <strong id="hud-fps">60 FPS</strong>
       </div>
+      
+      <div id="hud-failsafe-pill" class="status-pill failsafe-pill hidden">
+        <span class="failsafe-pulse"></span>
+        <span id="hud-failsafe-text">UPLINK ACTIVE</span>
+      </div>
     </div>
   </header>
 
@@ -123,7 +128,7 @@
         <div class="group-title danger-title">&#x26A0; CASUALTY SIMULATION LAB</div>
         <div class="btn-grid-2">
           <button id="btn-kill-leader" class="tactical-btn btn-danger">&#x26A1; KILL LEADER</button>
-          <button id="btn-cut-tether" class="tactical-btn btn-danger">&#x2702; CUT TETHER</button>
+          <button id="btn-cut-tether" class="tactical-btn btn-danger">&#x2702; CUT / JETTISON TETHER</button>
           <button id="btn-kill-random" class="tactical-btn btn-danger">&#x25BD; KILL ESCORT</button>
           <button id="btn-respawn-dead" class="tactical-btn btn-respawn">&#x267B; RESPAWN DEAD</button>
         </div>

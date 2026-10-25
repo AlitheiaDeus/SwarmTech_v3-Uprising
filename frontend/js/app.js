@@ -398,7 +398,7 @@
     function updateDroneBadge(sprite, d) {
         if (!sprite || !sprite.userData) return;
         const { canvas, texture } = sprite.userData;
-        const key = `${d.id}_${d.is_leader}_${d.crashed}_${d.lost_link}_${d.flight_state}_${d.status}`;
+        const key = `${d.id}_${d.is_leader}_${d.crashed}_${d.lost_link}_${d.flight_state}_${d.status}_${d.is_2ic}`;
         if (sprite.userData.lastKey === key) return;
         sprite.userData.lastKey = key;
 
@@ -420,6 +420,13 @@
             labelText = `#${d.id}`;
             subText = 'CRASHED';
             dotColor = '#FF3366';
+        } else if (d.status === 'BREAKAWAY_JETTISON') {
+            borderColor = '#FFAA00';
+            bgColor = 'rgba(42, 28, 4, 0.95)';
+            textColor = '#FFAA00';
+            labelText = `#${d.id}`;
+            subText = '⏏ JETTISON';
+            dotColor = '#FFAA00';
         } else if (d.is_leader) {
             borderColor = '#FFB800';
             bgColor = 'rgba(42, 28, 4, 0.92)';
@@ -427,6 +434,13 @@
             labelText = `#${d.id}`;
             subText = 'FLAGSHIP';
             dotColor = '#FFB800';
+        } else if (d.is_2ic) {
+            borderColor = '#00F0FF';
+            bgColor = 'rgba(6, 25, 35, 0.92)';
+            textColor = '#00F0FF';
+            labelText = `#${d.id}`;
+            subText = '2IC';
+            dotColor = '#00F0FF';
         } else if (d.flight_state === 'TAKEOFF') {
             borderColor = '#39FF14';
             bgColor = 'rgba(8, 35, 12, 0.92)';
@@ -574,6 +588,10 @@
                     rotorColor = 0x661122; // Dim dead red
                     rotorOpacity = 0.2;
                     indicatorColor = COLORS.crashed;
+                } else if (d.status === 'BREAKAWAY_JETTISON') {
+                    rotorColor = 0xFFAA00; // Bright amber jettison
+                    rotorOpacity = 0.7;
+                    indicatorColor = 0xFFAA00;
                 } else if (d.is_leader) {
                     rotorColor = COLORS.leader; // Bright neon amber
                     rotorOpacity = 0.65;
@@ -650,17 +668,70 @@
         updateTetherCurve(frame.tether, currentLeaderDrone);
     }
 
+    let tetherSeveredPrev = false;
+    let tetherDropProgress = 0.0;
+    let tetherLastTipPos = new THREE.Vector3(0, 0, 20);
+
     function updateTetherCurve(tetherData, leaderEntry) {
         if (!tetherMesh) return;
 
-        if (!tetherData || tetherData.severed || !leaderEntry) {
+        if (!tetherData) {
             tetherMesh.visible = false;
             return;
         }
 
-        tetherMesh.visible = true;
         const anchor = new THREE.Vector3(0, 0, 1.5);
+
+        // Check if tether is severed or leader is gone (TKT-16)
+        if (tetherData.severed || !leaderEntry) {
+            if (!tetherSeveredPrev) {
+                tetherSeveredPrev = true;
+                tetherDropProgress = 0.0;
+                if (leaderEntry) {
+                    tetherLastTipPos.copy(leaderEntry.currentPos);
+                }
+            }
+
+            // Animate severed line falling to ground and dissolving
+            if (tetherDropProgress < 1.0) {
+                tetherDropProgress = Math.min(1.0, tetherDropProgress + 0.025);
+                tetherMesh.visible = true;
+
+                // Severed tip drops to ground and slack sags
+                const currentTip = new THREE.Vector3(
+                    tetherLastTipPos.x,
+                    tetherLastTipPos.y,
+                    Math.max(0.2, tetherLastTipPos.z * (1.0 - tetherDropProgress))
+                );
+
+                const points = [];
+                const segments = 16;
+                for (let i = 0; i <= segments; i++) {
+                    const t = i / segments;
+                    const p = new THREE.Vector3().lerpVectors(anchor, currentTip, t);
+                    // Heavy gravity sag as line goes completely slack
+                    const sag = (2.5 + 8.0 * tetherDropProgress) * Math.sin(t * Math.PI);
+                    p.z = Math.max(0.1, p.z - sag);
+                    points.push(p);
+                }
+
+                tetherMesh.geometry.setFromPoints(points);
+                tetherMesh.geometry.computeVertexNormals();
+                tetherMesh.material.opacity = Math.max(0.0, 0.85 * (1.0 - tetherDropProgress));
+            } else {
+                tetherMesh.visible = false;
+            }
+            return;
+        }
+
+        // Tether connected: reset drop state
+        tetherSeveredPrev = false;
+        tetherDropProgress = 0.0;
+        tetherMesh.material.opacity = 0.85;
+        tetherMesh.visible = true;
+
         const leadPos = leaderEntry.currentPos;
+        tetherLastTipPos.copy(leadPos);
 
         // Generate 16 catenary curve points with slight gravity sag
         const points = [];

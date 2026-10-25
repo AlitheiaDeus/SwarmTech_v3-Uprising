@@ -127,6 +127,65 @@ html, body {
   box-shadow: 0 0 8px var(--neon-red);
 }
 
+/* Failsafe & Lost-Link Pill (TKT-16) */
+.failsafe-pill {
+  border: 1px solid var(--neon-amber);
+  background: rgba(255, 184, 0, 0.12);
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--neon-amber);
+  animation: pulse-border 1.5s infinite alternate;
+}
+
+.failsafe-pill.hidden {
+  display: none !important;
+}
+
+.failsafe-pill.failsafe-loiter {
+  border-color: var(--neon-amber);
+  color: var(--neon-amber);
+  background: rgba(255, 184, 0, 0.15);
+}
+
+.failsafe-pill.failsafe-rtb {
+  border-color: var(--neon-cyan);
+  color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.15);
+  animation: pulse-border-cyan 1.2s infinite alternate;
+}
+
+.failsafe-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--neon-amber);
+  box-shadow: 0 0 8px var(--neon-amber);
+  display: inline-block;
+  animation: pulse-glow 1s infinite alternate;
+}
+
+.failsafe-rtb .failsafe-pulse {
+  background: var(--neon-cyan);
+  box-shadow: 0 0 8px var(--neon-cyan);
+}
+
+@keyframes pulse-border {
+  from { box-shadow: 0 0 4px rgba(255, 184, 0, 0.2); }
+  to { box-shadow: 0 0 12px rgba(255, 184, 0, 0.6); }
+}
+
+@keyframes pulse-border-cyan {
+  from { box-shadow: 0 0 4px rgba(0, 240, 255, 0.2); }
+  to { box-shadow: 0 0 14px rgba(0, 240, 255, 0.7); }
+}
+
+@keyframes pulse-glow {
+  from { transform: scale(0.85); opacity: 0.7; }
+  to { transform: scale(1.15); opacity: 1.0; }
+}
+
 /* Camera Hint Overlay */
 #camera-hints {
   position: absolute;
@@ -412,6 +471,40 @@ html, body {
   color: var(--neon-red);
   background: rgba(255, 51, 102, 0.15);
   border: 1px solid rgba(255, 51, 102, 0.5);
+}
+
+.tag-jettison {
+  color: #FFAA00;
+  background: rgba(255, 170, 0, 0.2);
+  border: 1px solid #FFAA00;
+  font-weight: 700;
+  animation: pulse-glow 0.8s infinite alternate;
+}
+
+.badge-2ic {
+  color: var(--neon-cyan) !important;
+  background: rgba(0, 240, 255, 0.2) !important;
+  border: 1px solid var(--neon-cyan) !important;
+  box-shadow: 0 0 6px rgba(0, 240, 255, 0.4);
+  font-weight: 700;
+}
+
+.badge-jettison {
+  color: #FFAA00 !important;
+  background: rgba(255, 170, 0, 0.2) !important;
+  border: 1px solid #FFAA00 !important;
+  box-shadow: 0 0 6px rgba(255, 170, 0, 0.5);
+  font-weight: 700;
+}
+
+.jettison-card {
+  border-color: #FFAA00 !important;
+  box-shadow: 0 0 12px rgba(255, 170, 0, 0.4) !important;
+}
+
+.jettison-card .drone-dot {
+  background: #FFAA00;
+  box-shadow: 0 0 8px #FFAA00;
 }
 
 .card-metrics {
