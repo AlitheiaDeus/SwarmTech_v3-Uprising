@@ -194,9 +194,9 @@ class LeaderFollowerBrain(BaseBrain):
             )
 
         elif self.formation_mode == "PERIMETER_PATROL":
+            # Static defensive sentry ring holding equidistant guard stations around target
             radius = 25.0
-            omega = 0.4
-            angle = omega * self.sim.sim_time + (2.0 * math.pi * (k - 1) / max(1, len(living_followers)))
+            angle = (2.0 * math.pi * (k - 1)) / max(1, len(living_followers))
             return (
                 self.sim.target_pos
                 + np.array([radius * math.cos(angle), radius * math.sin(angle), 0.0])

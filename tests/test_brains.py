@@ -5,6 +5,7 @@ quorum barrier consensus, hot-swapping, and Autopilot safety control layer.
 """
 
 import unittest
+import math
 import numpy as np
 import json
 
@@ -185,6 +186,40 @@ class TestBrains(unittest.TestCase):
         # Output must be pure velocity damping (-vel * 3.0)
         expected_acc = -vel * 3.0
         np.testing.assert_allclose(acc, expected_acc)
+
+    def test_static_perimeter_sentry_ring(self):
+        """Verify PERIMETER_PATROL positions followers at fixed static azimuthal stations
+        around target (zero carousel rotation over time)."""
+        self.sim.set_formation("PERIMETER_PATROL")
+        brain: LeaderFollowerBrain = self.sim.brain
+        leader = self.sim.leader
+        followers = [d for d in self.sim.drones if not d.is_leader and not d.crashed]
+        n_followers = len(followers)
+        self.assertGreater(n_followers, 1)
+
+        # Record initial slot positions at t = 0
+        initial_slots = {}
+        for idx, follower in enumerate(followers):
+            slot = brain._get_formation_slot(follower, leader)
+            initial_slots[follower.id] = np.copy(slot)
+
+            # Verify radius is exactly 25.0m from target_pos
+            dist_to_target = float(np.linalg.norm(slot - self.sim.target_pos))
+            self.assertAlmostEqual(dist_to_target, 25.0, places=3)
+
+            # Verify azimuthal angle theta_k = 2*pi*idx / n_followers
+            expected_angle = (2.0 * np.pi * idx) / n_followers
+            actual_angle = math.atan2(slot[1] - self.sim.target_pos[1], slot[0] - self.sim.target_pos[0]) % (2.0 * np.pi)
+            self.assertAlmostEqual(actual_angle, expected_angle % (2.0 * np.pi), places=3)
+
+        # Advance simulation by 2.0 seconds (120 steps)
+        for _ in range(120):
+            self.sim.step()
+
+        # Slots must remain completely STATIC (zero rotation, no carousel orbit)
+        for follower in followers:
+            current_slot = brain._get_formation_slot(follower, self.sim.leader)
+            np.testing.assert_allclose(current_slot, initial_slots[follower.id], atol=1e-5)
 
 
 if __name__ == "__main__":
