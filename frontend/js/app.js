@@ -398,7 +398,7 @@
     function updateDroneBadge(sprite, d) {
         if (!sprite || !sprite.userData) return;
         const { canvas, texture } = sprite.userData;
-        const key = `${d.id}_${d.is_leader}_${d.crashed}_${d.lost_link}_${d.status}`;
+        const key = `${d.id}_${d.is_leader}_${d.crashed}_${d.lost_link}_${d.flight_state}_${d.status}`;
         if (sprite.userData.lastKey === key) return;
         sprite.userData.lastKey = key;
 
@@ -427,6 +427,20 @@
             labelText = `#${d.id}`;
             subText = 'FLAGSHIP';
             dotColor = '#FFB800';
+        } else if (d.flight_state === 'TAKEOFF') {
+            borderColor = '#39FF14';
+            bgColor = 'rgba(8, 35, 12, 0.92)';
+            textColor = '#39FF14';
+            labelText = `#${d.id}`;
+            subText = 'TAKEOFF';
+            dotColor = '#39FF14';
+        } else if (d.flight_state === 'EN_ROUTE') {
+            borderColor = '#00F0FF';
+            bgColor = 'rgba(6, 25, 35, 0.92)';
+            textColor = '#00F0FF';
+            labelText = `#${d.id}`;
+            subText = 'EN ROUTE';
+            dotColor = '#00F0FF';
         } else if (d.lost_link) {
             borderColor = '#FFB800';
             bgColor = 'rgba(38, 26, 5, 0.92)';
@@ -564,6 +578,14 @@
                     rotorColor = COLORS.leader; // Bright neon amber
                     rotorOpacity = 0.65;
                     indicatorColor = COLORS.leader;
+                } else if (d.flight_state === 'TAKEOFF') {
+                    rotorColor = 0x39FF14; // Bright launch neon green
+                    rotorOpacity = 0.65;
+                    indicatorColor = 0x39FF14;
+                } else if (d.flight_state === 'EN_ROUTE') {
+                    rotorColor = 0x00E5FF; // High speed transit cyan
+                    rotorOpacity = 0.55;
+                    indicatorColor = 0x00E5FF;
                 } else if (d.status === 'PROPAGATING') {
                     rotorColor = COLORS.propagating; // Pulse echo amber
                     rotorOpacity = 0.55;

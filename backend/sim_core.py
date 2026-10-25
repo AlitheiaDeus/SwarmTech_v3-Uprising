@@ -105,6 +105,7 @@ class Drone:
 
         # Comms & Fault Tolerance
         self.crashed: bool = False
+        self.flight_state: str = "CRUISE"  # "TAKEOFF", "EN_ROUTE", "CRUISE", "CRASHED"
         self.lost_link: bool = False
         self.lkp: np.ndarray = np.copy(self.pos)
         self.last_heartbeat_time: float = 0.0
@@ -114,7 +115,12 @@ class Drone:
         self.status: str = "ACTIVE" if not is_leader else "FLEET_LEADER"
         self.tether_lost: bool = False
 
-    def reset_state(self, pos: np.ndarray, is_leader: bool = False) -> None:
+    def reset_state(
+        self,
+        pos: np.ndarray,
+        is_leader: bool = False,
+        flight_state: str = "TAKEOFF",
+    ) -> None:
         """Reset drone state for relaunch or reboot."""
         self.pos = np.array(pos, dtype=float)
         self.vel = np.zeros(3, dtype=float)
@@ -124,6 +130,7 @@ class Drone:
         self.roll = 0.0
         self.rotor_rpm = 5200.0
         self.crashed = False
+        self.flight_state = flight_state
         self.lost_link = False
         self.lkp = np.copy(self.pos)
         self.last_heartbeat_time = 0.0
@@ -148,6 +155,7 @@ class Drone:
             "pitch": round(float(self.pitch), 3),
             "roll": round(float(self.roll), 3),
             "crashed": self.crashed,
+            "flight_state": self.flight_state,
             "lost_link": self.lost_link,
             "lkp": [round(float(v), 2) for v in self.lkp],
             "battery": round(float(self.battery), 1),
@@ -266,6 +274,46 @@ class SwarmSimulator:
             else {d.id: np.zeros(3, dtype=float) for d in self.drones}
         )
 
+        # 5b. 3-Phase Flight State Machine Overrides (TAKEOFF -> EN_ROUTE -> CRUISE)
+        for drone in self.drones:
+            if drone.crashed:
+                continue
+
+            if drone.flight_state == "TAKEOFF":
+                # Phase 1: Pure vertical climb to Z >= 20.0m
+                # Horizontal guidance locked to 0 with active velocity braking
+                # Vertical acceleration climbs smoothly up to 5.0 m/s
+                target_vz = 5.0
+                climb_az = float(np.clip(4.0 * (target_vz - drone.vel[2]), 0.0, 8.0))
+                brake_ax = float(-4.0 * drone.vel[0])
+                brake_ay = float(-4.0 * drone.vel[1])
+                guidance_accs[drone.id] = np.array([brake_ax, brake_ay, climb_az], dtype=float)
+
+                # Near launch pad, suppress horizontal avoidance so drone ascends cleanly
+                if drone.pos[2] < 5.0:
+                    avoidance_accs[drone.id][0] = 0.0
+                    avoidance_accs[drone.id][1] = 0.0
+
+            elif drone.flight_state == "EN_ROUTE":
+                # Phase 2: Autonomous transit toward swarm formation slot or active target
+                # Check arrival proximity to transition to Phase 3: CRUISE
+                if self.active_brain_name == "LEADER_FOLLOWER":
+                    current_leader = self.leader
+                    if current_leader is not None:
+                        if hasattr(self.brain, "_get_formation_slot"):
+                            slot_pos = self.brain._get_formation_slot(drone, current_leader)
+                            if float(np.linalg.norm(drone.pos - slot_pos)) <= 5.0:
+                                drone.flight_state = "CRUISE"
+                    else:
+                        drone.flight_state = "CRUISE"
+                elif self.active_brain_name == "GOSSIP_CONSENSUS":
+                    if hasattr(self.brain, "peer_states") and drone.id in self.brain.peer_states:
+                        peer_state = self.brain.peer_states[drone.id]
+                        if float(np.linalg.norm(drone.pos - peer_state.active_target)) <= 15.0:
+                            drone.flight_state = "CRUISE"
+                else:
+                    drone.flight_state = "CRUISE"
+
         # 6. Integrate Kinematics (Euler) & Boundary Clamps
         for drone in self.drones:
             if drone.crashed:
@@ -302,8 +350,26 @@ class SwarmSimulator:
             if vel_mag > V_MAX:
                 drone.vel = (drone.vel / vel_mag) * V_MAX
 
+            # If TAKEOFF and near ground, damp horizontal velocity
+            if drone.flight_state == "TAKEOFF" and drone.pos[2] < 5.0:
+                drone.vel[0] *= 0.85
+                drone.vel[1] *= 0.85
+
             # Update position
             drone.pos += drone.vel * dt
+
+            # Transition from TAKEOFF to EN_ROUTE once Z >= 20.0m
+            if drone.flight_state == "TAKEOFF" and drone.pos[2] >= 20.0:
+                drone.flight_state = "EN_ROUTE"
+                # If no living leader exists in the fleet, promote this drone to leader
+                has_living_leader = any(
+                    d.is_leader and not d.crashed for d in self.drones if d.id != drone.id
+                )
+                if not has_living_leader:
+                    drone.is_leader = True
+                    drone.tier = TIER_LEADER
+                    drone.status = "FLEET_LEADER"
+                    drone.flight_state = "CRUISE"
 
             # Floor safety clamp (keep airborne above 0.5m)
             if drone.pos[2] < 0.5:
@@ -642,6 +708,7 @@ class SwarmSimulator:
     def _trigger_crash(self, drone: Drone, reason: str = "") -> None:
         """Disengage drone motors and trigger ballistic tumble."""
         drone.crashed = True
+        drone.flight_state = "CRASHED"
         drone.status = "CRASHED"
         if drone.is_leader:
             drone.is_leader = False
@@ -686,6 +753,50 @@ class SwarmSimulator:
     # ==========================================================================
     # 6. Mission Controls & Casualty Laboratory
     # ==========================================================================
+    def launch_reinforcement(self) -> Drone:
+        """Deploy a new reinforcement drone from the base launch pad.
+        Assigns the next sequential drone ID (max_id + 1).
+        Spawns on the base launch pad, climbing vertically to safe cruise altitude (Z >= 20m)
+        before transitioning to EN_ROUTE and joining the active formation."""
+        max_id = max((d.id for d in self.drones), default=-1)
+        new_id = max_id + 1
+
+        # Base launch pad coordinates outside the 3.0m tether clearance envelope
+        # Pad centered at (0.0, -6.0, 0.5) with multi-drone grid layout (>= 2.5m separation)
+        slot_idx = new_id % 8
+        pad_x = float((slot_idx % 4 - 1.5) * 2.5)
+        pad_y = float(-6.0 - (slot_idx // 4) * 3.0)
+        spawn_pos = np.array([pad_x, pad_y, 0.5], dtype=float)
+
+        drone = Drone(
+            drone_id=new_id,
+            tier=TIER_ESCORT,
+            pos=spawn_pos,
+            is_leader=False,
+        )
+        drone.flight_state = "TAKEOFF"
+        drone.status = "ACTIVE"
+        drone.vel = np.zeros(3, dtype=float)
+        drone.acc = np.zeros(3, dtype=float)
+        drone.rotor_rpm = 5200.0
+
+        # Prime LKP and heartbeat timestamp with current leader position
+        current_leader = self.leader
+        if current_leader is not None:
+            drone.lkp = np.copy(current_leader.pos)
+        else:
+            drone.lkp = np.copy(self.target_pos)
+        drone.last_heartbeat_time = self.sim_time
+
+        self.drones.append(drone)
+
+        # Register with active Gossip brain if needed
+        if hasattr(self.brain, "peer_states"):
+            if hasattr(self.brain, "_get_peer_state"):
+                self.brain._get_peer_state(new_id)
+
+        return drone
+
     def kill_leader(self) -> None:
         """Trigger emergency motor cut on active leader."""
         current_leader = self.leader
@@ -700,17 +811,15 @@ class SwarmSimulator:
                 break
 
     def reboot_drone(self, drone_id: int) -> None:
-        """Safely redeploy a crashed drone into the formation."""
+        """Safely redeploy a crashed drone into the formation via vertical takeoff."""
         for drone in self.drones:
             if drone.id == drone_id:
-                # Find spawn offset near leader or anchor
-                ref_pos = self.leader.pos if self.leader is not None else np.array([0.0, 0.0, 20.0])
-                spawn_pos = ref_pos + np.array([-15.0 - (drone_id * 2.0), 0.0, 5.0])
-                drone.reset_state(spawn_pos, is_leader=False)
+                ground_pos = np.array([drone.pos[0], drone.pos[1], 0.5], dtype=float)
+                drone.reset_state(ground_pos, is_leader=False, flight_state="TAKEOFF")
                 break
 
     def reboot_all_dead(self) -> List[int]:
-        """Reboot and revive all crashed casualties in-place
+        """Reboot and revive all crashed casualties in-place from ground via vertical takeoff
         without resetting surviving drones, simulation clock, or active targets."""
         revived_ids: List[int] = []
         crashed_drones = [d for d in self.drones if d.crashed]
@@ -718,20 +827,18 @@ class SwarmSimulator:
             return revived_ids
 
         has_living_leader = any(d.is_leader and not d.crashed for d in self.drones)
-        ref_pos = self.leader.pos if has_living_leader and self.leader is not None else np.array([0.0, 0.0, 20.0])
 
         for i, drone in enumerate(crashed_drones):
-            # If no living leader exists in the fleet, promote the first revived drone to flagship
             make_leader = (not has_living_leader and i == 0)
-            if make_leader:
-                spawn_pos = np.copy(self.target_pos) if self.target_pos is not None else np.array([0.0, 0.0, 20.0])
-                drone.reset_state(spawn_pos, is_leader=True)
-                has_living_leader = True
-            else:
-                spawn_pos = ref_pos + np.array([-15.0 - (drone.id * 2.0), 0.0, 5.0])
-                drone.reset_state(spawn_pos, is_leader=False)
+            ground_pos = np.array([drone.pos[0], drone.pos[1], 0.5], dtype=float)
+            # Give slight stagger if multiple crashed at the exact same location
+            ground_pos[0] += (drone.id % 3 - 1) * 2.0
+            ground_pos[1] += ((drone.id // 3) % 3 - 1) * 2.0
 
-            drone.status = "PROMOTED_LEADER" if drone.is_leader else "ACTIVE"
+            drone.reset_state(ground_pos, is_leader=make_leader, flight_state="TAKEOFF")
+            drone.status = "PROMOTED_LEADER" if make_leader else "ACTIVE"
+            if make_leader:
+                has_living_leader = True
             revived_ids.append(drone.id)
 
         return revived_ids

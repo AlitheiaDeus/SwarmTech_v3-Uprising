@@ -15,6 +15,8 @@
     let tetherSevered = false;
     const deadDroneIds = new Set();
     const lostLinkIds = new Set();
+    const takeoffDroneIds = new Set();
+    const enrouteDroneIds = new Set();
 
     // DOM Elements
     let cardsContainer = null;
@@ -105,6 +107,11 @@
             } else {
                 logEvent('INFO', 'No destroyed casualties to respawn. Fleet 100% operational.');
             }
+        });
+
+        setupBtn('btn-reinforce-swarm', () => {
+            logEvent('CMD', 'Launching reinforcement drone from base pad: LAUNCH_REINFORCEMENT');
+            window.swarmClient?.send({ cmd: 'LAUNCH_REINFORCEMENT' });
         });
 
         setupBtn('btn-reboot-fleet', () => {
@@ -212,6 +219,23 @@
                     logEvent('STATUS', `Drone #${d.id} rebooted and active.`);
                 }
 
+                if (d.flight_state === 'TAKEOFF' && !takeoffDroneIds.has(d.id)) {
+                    takeoffDroneIds.add(d.id);
+                    logEvent('LAUNCH', `Reinforcement Drone #${d.id} launched from base pad.`);
+                } else if (d.flight_state !== 'TAKEOFF' && takeoffDroneIds.has(d.id)) {
+                    takeoffDroneIds.delete(d.id);
+                    if (d.flight_state === 'EN_ROUTE') {
+                        logEvent('STATUS', `Drone #${d.id} reached transition altitude (20m). En route to formation.`);
+                    }
+                }
+
+                if (d.flight_state === 'EN_ROUTE' && !enrouteDroneIds.has(d.id)) {
+                    enrouteDroneIds.add(d.id);
+                } else if (d.flight_state === 'CRUISE' && enrouteDroneIds.has(d.id)) {
+                    enrouteDroneIds.delete(d.id);
+                    logEvent('STATUS', `Drone #${d.id} reached formation slot. Status: CRUISE.`);
+                }
+
                 if (d.lost_link && !lostLinkIds.has(d.id)) {
                     lostLinkIds.add(d.id);
                     logEvent('WARN', `Drone #${d.id} LOST LINK! Seeking LKP (${d.lkp[0]}, ${d.lkp[1]}, ${d.lkp[2]}).`);
@@ -251,7 +275,7 @@
         card.elBatBar.style.width = `${Math.max(0, Math.min(100, drone.battery))}%`;
 
         // Status Styling & Badges
-        card.el.classList.remove('leader-card', 'crashed-card', 'lkp-card', 'gossip-card');
+        card.el.classList.remove('leader-card', 'crashed-card', 'lkp-card', 'gossip-card', 'takeoff-card', 'enroute-card');
         card.elRole.className = 'drone-role-badge';
 
         if (drone.crashed) {
@@ -266,6 +290,20 @@
             card.elStatus.textContent = 'LEADER';
             card.elStatus.className = 'status-tag tag-leader';
             card.elRole.textContent = 'FLAGSHIP';
+            card.elActionBtn.textContent = 'KILL';
+            card.elActionBtn.className = 'card-btn-action btn-kill';
+        } else if (drone.flight_state === 'TAKEOFF') {
+            card.el.classList.add('takeoff-card');
+            card.elStatus.textContent = 'TAKEOFF';
+            card.elStatus.className = 'status-tag tag-takeoff';
+            card.elRole.textContent = 'REINFORCE';
+            card.elActionBtn.textContent = 'KILL';
+            card.elActionBtn.className = 'card-btn-action btn-kill';
+        } else if (drone.flight_state === 'EN_ROUTE') {
+            card.el.classList.add('enroute-card');
+            card.elStatus.textContent = 'EN ROUTE';
+            card.elStatus.className = 'status-tag tag-enroute';
+            card.elRole.textContent = `TIER-${drone.tier}`;
             card.elActionBtn.textContent = 'KILL';
             card.elActionBtn.className = 'card-btn-action btn-kill';
         } else if (drone.lost_link) {

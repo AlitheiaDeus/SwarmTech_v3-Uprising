@@ -144,6 +144,17 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 self.assertIn(0, ack_reboot_data.get("revived_ids", []))
                 self.assertFalse(self.sim.drones[0].crashed)
 
+                # Send LAUNCH_REINFORCEMENT command
+                initial_count = len(self.sim.drones)
+                cmd_reinforce = {"cmd": "LAUNCH_REINFORCEMENT"}
+                await ws.send_str(json.dumps(cmd_reinforce))
+
+                ack_reinforce = await wait_for_ack(ws, "LAUNCH_REINFORCEMENT")
+                self.assertEqual(ack_reinforce.get("status"), "OK")
+                self.assertEqual(ack_reinforce.get("drone_id"), initial_count)
+                self.assertEqual(len(self.sim.drones), initial_count + 1)
+                self.assertEqual(self.sim.drones[-1].flight_state, "TAKEOFF")
+
 
 if __name__ == "__main__":
     unittest.main()

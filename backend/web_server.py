@@ -167,6 +167,15 @@ class SwarmWebServer:
             self.sim.reboot_drone(drone_id)
             return {"status": "OK", "cmd": cmd, "rebooted_id": drone_id}
 
+        elif cmd in ("LAUNCH_REINFORCEMENT", "REINFORCE_SWARM", "SPAWN_REINFORCEMENT"):
+            new_drone = self.sim.launch_reinforcement()
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "drone_id": new_drone.id,
+                "total_drones": len(self.sim.drones),
+            }
+
         elif cmd in ("REBOOT_ALL_DEAD", "RESPAWN_ALL_DEAD", "REBOOT_DEAD"):
             revived = self.sim.reboot_all_dead()
             return {

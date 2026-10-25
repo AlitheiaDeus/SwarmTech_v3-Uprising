@@ -306,6 +306,82 @@ class TestSimCore(unittest.TestCase):
             for d in self.sim.drones:
                 self.assertFalse(np.isnan(d.pos).any())
 
+    def test_launch_reinforcement_sequential_id(self):
+        """Verify launch_reinforcement creates sequential drone IDs with safe pad clearance."""
+        initial_count = len(self.sim.drones)
+        self.assertEqual(initial_count, 6)
+
+        # Launch Drone #6
+        drone6 = self.sim.launch_reinforcement()
+        self.assertEqual(drone6.id, 6)
+        self.assertEqual(drone6.flight_state, "TAKEOFF")
+        self.assertEqual(drone6.pos[2], 0.5)
+        self.assertFalse(drone6.crashed)
+        self.assertEqual(len(self.sim.drones), 7)
+
+        # Distance to tether anchor must be >= 3.0m
+        dist_to_anchor = float(np.linalg.norm(drone6.pos[:2] - self.sim.tether_anchor[:2]))
+        self.assertGreaterEqual(dist_to_anchor, 3.0)
+
+        # Launch Drone #7
+        drone7 = self.sim.launch_reinforcement()
+        self.assertEqual(drone7.id, 7)
+        self.assertEqual(len(self.sim.drones), 8)
+
+        # Pad separation between Drone #6 and Drone #7 must be >= 2.0m (no Zone 4 clash)
+        pad_dist = float(np.linalg.norm(drone6.pos - drone7.pos))
+        self.assertGreaterEqual(pad_dist, 2.0)
+
+    def test_vertical_takeoff_flight_profile(self):
+        """Verify 3-phase state machine: pure vertical climb -> en route -> cruise."""
+        drone = self.sim.launch_reinforcement()
+        initial_xy = np.copy(drone.pos[:2])
+
+        # Step 30 frames (0.5s) while ascending
+        for _ in range(30):
+            self.sim.step()
+
+        # Altitude must have increased
+        self.assertGreater(drone.pos[2], 1.0)
+        # Horizontal drift during low altitude must remain negligible (< 0.2m)
+        drift_xy = float(np.linalg.norm(drone.pos[:2] - initial_xy))
+        self.assertLess(drift_xy, 0.2)
+        # Vertical velocity must be positive climbing
+        self.assertGreater(drone.vel[2], 0.0)
+
+        # Step forward until altitude clears 20.0m
+        steps = 0
+        while drone.pos[2] < 20.0 and steps < 600:
+            self.sim.step()
+            steps += 1
+
+        self.assertGreaterEqual(drone.pos[2], 20.0)
+        # Must transition out of TAKEOFF to EN_ROUTE (or CRUISE)
+        self.assertIn(drone.flight_state, ["EN_ROUTE", "CRUISE"])
+
+    def test_reinforcement_takeover_when_all_dead(self):
+        """Verify reinforcement ascends and assumes flagship leadership when fleet is dead."""
+        # Kill all drones
+        for d in self.sim.drones:
+            self.sim.kill_drone(d.id)
+        self.assertIsNone(self.sim.leader)
+
+        # Launch reinforcement drone #8
+        drone = self.sim.launch_reinforcement()
+        self.assertFalse(drone.is_leader)
+
+        # Climb to 20m
+        steps = 0
+        while drone.pos[2] < 20.0 and steps < 600:
+            self.sim.step()
+            steps += 1
+
+        # Must be promoted to leader upon clearing transition altitude
+        self.assertTrue(drone.is_leader)
+        self.assertEqual(drone.status, "FLEET_LEADER")
+        self.assertEqual(self.sim.leader.id, drone.id)
+
 
 if __name__ == "__main__":
     unittest.main()
+
