@@ -9,6 +9,7 @@ kanban
   reported["Reported (Triage / Ideas)"]
     pln1["[PLN-01] Tether Cut Policy: Power Drop vs Emergency Battery RTB"]
     pln2["[PLN-02] Gossip Mode Tether Semantics: Untethered vs Ground Gateway"]
+    pln3["[PLN-03] Simulating Packet Loss & RF Link Degradation"]
     idea1["Dynamic Wind Gust Vector Field"]
     idea2["Gamepad / Joystick Manual Drone Override"]
   todo["Todo (Planned & Scoped)"]
@@ -53,6 +54,7 @@ kanban
 | **TKT-13** | One-Click Respawn All Casualties (`sim_core.py`, `hud.js`) | **Medium** | **Planned** | - GCS button to reboot all destroyed drones simultaneously without resetting living drones or mission clock. | `.\run.ps1 -UnitTest` | Add `REBOOT_ALL_DEAD` backend handler and HUD button in casualty panel to iterate over `crashed` drones only and revive them in-place. |
 | **PLN-01** | Operator Policy: Tether Cut Dynamics (`sim_core.py`) | **Low** | **Discussion** | - Decide whether tether severance = immediate total power loss (ballistic crash) or loss of wired link + emergency battery RTB. | N/A (Architecture) | Commercial tethered drones carry a 2-minute emergency LiPo buffer. If cut: Option A (current) cuts motor power immediately; Option B triggers emergency autonomic RTB / controlled landing while handing swarm command to an untethered escort. |
 | **PLN-02** | Gossip Mode Tether & Gateway Semantics (`sim_core.py`) | **Low** | **Discussion** | - Clarify whether Gossip mode should hide the tether entirely (pure untethered mesh) or treat the GCS mast as a stationary RF node. | N/A (Architecture) | In pure decentralized gossip, no single drone is tethered to ground. Options: (1) Automatically disconnect/hide tether when in Gossip mode; (2) Model GCS mast as stationary mesh anchor emitting mission updates. |
+| **PLN-03** | Simulating Packet Loss & RF Link Degradation (`leader_follower.py`, `gossip_consensus.py`, `hud.js`) | **Low** | **Discussion** | - Model RF packet drop dynamics: uniform drop vs distance-squared path loss vs operator-controlled jamming.<br>- Add live packet loss slider (0%–50%) and link quality telemetry to test LKP failover & gossip quorum resilience. | N/A (Architecture) | Currently packet loss is a fixed 1% uniform drop when enabled. Options: (1) Distance-dependent drop probability $P_{\text{loss}}(d) = 1 - e^{-(d/R_0)^2}$; (2) Operator RF degradation / jamming slider on GCS HUD; (3) Per-drone packet reception rate and signal quality telemetry bars. |
 
 ---
 
@@ -75,6 +77,7 @@ kanban
    - `[TKT-11]`: Implement virtual-anchor consensus formations for Gossip mesh (distributed sentry ring / grid).
 4. **Step 4: Dynamic Flight Demonstration (`[TKT-12]`)**:
    - `[TKT-12]`: Continuous 3D auto-patrol circuit for dynamic swarm pursuit.
-5. **Step 5: Architectural Decisions (`[PLN-01]`, `[PLN-02]`)**:
+5. **Step 5: Architectural Decisions (`[PLN-01]`, `[PLN-02]`, `[PLN-03]`)**:
    - `[PLN-01]`: Tether severance policy (ballistic power cut vs 2-minute emergency battery RTB).
    - `[PLN-02]`: Gossip mode tether visibility (untethered mesh vs GCS gateway).
+   - `[PLN-03]`: Packet loss & RF degradation model (path loss vs operator jamming slider vs link metrics).
