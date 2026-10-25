@@ -547,6 +547,37 @@ html, body {
   padding: 6px 4px;
 }
 
+.btn-patrol {
+  margin-top: 8px;
+  width: 100%;
+  border-color: rgba(0, 240, 255, 0.45);
+  color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.08);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+}
+
+.btn-patrol:hover {
+  background: rgba(0, 240, 255, 0.22);
+  border-color: #FFFFFF;
+  color: #FFFFFF;
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.5);
+}
+
+.btn-patrol.active-patrol {
+  background: rgba(0, 255, 170, 0.22);
+  border-color: var(--neon-emerald);
+  color: #FFFFFF;
+  box-shadow: 0 0 14px rgba(0, 255, 170, 0.6);
+  animation: pulse-patrol 2s infinite alternate;
+}
+
+@keyframes pulse-patrol {
+  0% { box-shadow: 0 0 8px rgba(0, 255, 170, 0.4); }
+  100% { box-shadow: 0 0 16px rgba(0, 255, 170, 0.8); }
+}
+
 .coord-input-row {
   display: flex;
   gap: 6px;

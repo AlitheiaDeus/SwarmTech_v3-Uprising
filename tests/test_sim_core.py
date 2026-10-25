@@ -424,6 +424,38 @@ class TestSimCore(unittest.TestCase):
         self.assertEqual(survivor.id, 7)
         self.assertEqual(len(self.sim.drones), 1)
 
+    def test_target_auto_patrol_loop(self):
+        """Verify dynamic 3D target auto-patrol smoothly updates target position."""
+        self.assertFalse(self.sim.patrol_active)
+
+        # Engage auto-patrol
+        active = self.sim.toggle_target_patrol(True)
+        self.assertTrue(active)
+        self.assertTrue(self.sim.patrol_active)
+
+        # Step 60 ticks (1.0s)
+        initial_target = np.copy(self.sim.target_pos)
+        for _ in range(60):
+            self.sim.step()
+
+        # Target must have moved continuously
+        dist_moved = float(np.linalg.norm(self.sim.target_pos - initial_target))
+        self.assertGreater(dist_moved, 0.5)
+
+        # Altitude must remain safe (Z >= 15.0m)
+        self.assertGreaterEqual(self.sim.target_pos[2], 15.0)
+
+        # Disengage auto-patrol
+        active = self.sim.toggle_target_patrol(False)
+        self.assertFalse(active)
+        self.assertFalse(self.sim.patrol_active)
+
+        # Target should now remain fixed on step
+        frozen_target = np.copy(self.sim.target_pos)
+        for _ in range(30):
+            self.sim.step()
+        np.testing.assert_allclose(self.sim.target_pos, frozen_target)
+
 
 if __name__ == "__main__":
     unittest.main()

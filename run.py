@@ -98,11 +98,22 @@ async def run_smoke_test(args: argparse.Namespace) -> int:
 
     start_wall = time.perf_counter()
     sim = SwarmSimulator(drone_count=args.count, seed=42)
-    bridge = MavlinkBridge(sim=sim, host=args.host, tx_port=9000, rx_port=9001, mavlink_port=14550)
-    server = SwarmWebServer(sim=sim, bridge=bridge, host=args.host, port=args.port)
 
-    await server.start()
-    print(f"[*] Backend server started at http://{args.host}:{args.port}")
+    try:
+        bridge = MavlinkBridge(sim=sim, host=args.host, tx_port=9000, rx_port=9001, mavlink_port=14550)
+    except OSError:
+        bridge = MavlinkBridge(sim=sim, host=args.host, tx_port=19000, rx_port=19001, mavlink_port=24550)
+
+    smoke_port = args.port
+    server = SwarmWebServer(sim=sim, bridge=bridge, host=args.host, port=smoke_port)
+    try:
+        await server.start()
+    except OSError:
+        smoke_port = 18080
+        server = SwarmWebServer(sim=sim, bridge=bridge, host=args.host, port=smoke_port)
+        await server.start()
+
+    print(f"[*] Backend server started at http://{args.host}:{smoke_port}")
     print(f"[*] Simulating 120 steps @ 60 FPS (2.0s simulated time)...")
 
     # Run for 120 steps (2.0 simulated seconds)

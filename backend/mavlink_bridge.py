@@ -124,10 +124,16 @@ class MavlinkBridge:
         """Execute a structured command on the underlying simulation engine."""
         cmd = cmd_dict.get("cmd", "").upper()
 
-        if cmd == "SET_TARGET":
+        if cmd in ("SET_TARGET", "DISPATCH_TARGET"):
             pos = cmd_dict.get("pos", [60.0, 40.0, 30.0])
+            self.sim.patrol_active = False
             self.sim.set_target(pos)
-            return {"status": "OK", "cmd": cmd, "target": pos}
+            return {"status": "OK", "cmd": cmd, "target": pos, "patrol_active": False}
+
+        elif cmd in ("TOGGLE_PATROL", "TOGGLE_TARGET_PATROL", "SET_PATROL"):
+            active = cmd_dict.get("active", None)
+            state = self.sim.toggle_target_patrol(active)
+            return {"status": "OK", "cmd": cmd, "patrol_active": state}
 
         elif cmd == "SET_FORMATION":
             mode = cmd_dict.get("mode", "ECHELON_ESCORT")

@@ -173,6 +173,15 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(any(d.id == 1 for d in self.sim.drones))
                 self.assertEqual(len(self.sim.drones), count_before_clear - 1)
 
+                # Send TOGGLE_PATROL command
+                cmd_patrol = {"cmd": "TOGGLE_PATROL"}
+                await ws.send_str(json.dumps(cmd_patrol))
+
+                ack_patrol = await wait_for_ack(ws, "TOGGLE_PATROL")
+                self.assertEqual(ack_patrol.get("status"), "OK")
+                self.assertTrue(ack_patrol.get("patrol_active"))
+                self.assertTrue(self.sim.patrol_active)
+
 
 if __name__ == "__main__":
     unittest.main()

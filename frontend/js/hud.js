@@ -13,6 +13,7 @@
     let currentFormation = null;
     let currentBrain = null;
     let tetherSevered = false;
+    let patrolActive = false;
     const deadDroneIds = new Set();
     const lostLinkIds = new Set();
     const takeoffDroneIds = new Set();
@@ -60,6 +61,10 @@
         setupBtn('btn-wp-bravo', () => dispatchTarget([-40.0, 70.0, 45.0], 'BRAVO'));
         setupBtn('btn-wp-charlie', () => dispatchTarget([50.0, -50.0, 25.0], 'CHARLIE'));
         setupBtn('btn-wp-rtb', () => dispatchTarget([0.0, 0.0, 20.0], 'RTB_BASE'));
+        setupBtn('btn-toggle-patrol', () => {
+            logEvent('CMD', 'Toggling continuous 3D target auto-patrol loop: TOGGLE_PATROL');
+            window.swarmClient?.send({ cmd: 'TOGGLE_PATROL' });
+        });
 
         // Custom Target Coordinates
         const btnDispatchCustom = document.getElementById('btn-dispatch-custom');
@@ -168,6 +173,12 @@
     }
 
     function dispatchTarget(pos, label) {
+        patrolActive = false;
+        const btnPatrol = document.getElementById('btn-toggle-patrol');
+        if (btnPatrol) {
+            btnPatrol.classList.remove('active-patrol');
+            btnPatrol.innerHTML = '&#x221E; AUTO PATROL LOOP';
+        }
         logEvent('CMD', `Dispatching Target [${label}] -> (${pos[0]}, ${pos[1]}, ${pos[2]})`);
         window.swarmClient?.send({ cmd: 'SET_TARGET', pos: pos });
         if (inputX) inputX.value = pos[0];
@@ -209,6 +220,23 @@
             inputX.value = frame.target[0];
             inputY.value = frame.target[1];
             inputZ.value = frame.target[2];
+        }
+
+        // 4b. Monitor Auto-Patrol Loop State
+        if (typeof frame.patrol_active === 'boolean' && frame.patrol_active !== patrolActive) {
+            patrolActive = frame.patrol_active;
+            const btnPatrol = document.getElementById('btn-toggle-patrol');
+            if (btnPatrol) {
+                if (patrolActive) {
+                    btnPatrol.classList.add('active-patrol');
+                    btnPatrol.innerHTML = '&#x221E; PATROL ACTIVE [ON]';
+                    logEvent('STATUS', '3D Target Auto-Patrol Loop ENGAGED.');
+                } else {
+                    btnPatrol.classList.remove('active-patrol');
+                    btnPatrol.innerHTML = '&#x221E; AUTO PATROL LOOP';
+                    logEvent('STATUS', '3D Target Auto-Patrol Loop DISENGAGED.');
+                }
+            }
         }
 
         // 5. Update Drone Telemetry Cards

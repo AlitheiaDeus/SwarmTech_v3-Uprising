@@ -191,6 +191,13 @@ class SwarmSimulator:
         self.tether_anchor: np.ndarray = np.copy(TETHER_ANCHOR)
         self.tether_severed: bool = False
 
+        # Dynamic Target Auto-Patrol Loop (TKT-12)
+        self.patrol_active: bool = False
+        self.patrol_speed: float = 0.08  # Radians per second (~78s per loop)
+        self.patrol_time: float = 0.0
+        self.patrol_center: np.ndarray = np.array([20.0, 20.0, 28.0], dtype=float)
+        self.patrol_scale: np.ndarray = np.array([50.0, 35.0, 10.0], dtype=float)
+
         # Build Drone Fleet
         self.drones: List[Drone] = []
         self._highest_drone_id: int = drone_count - 1
@@ -254,6 +261,15 @@ class SwarmSimulator:
     def step(self, dt: float = DT) -> None:
         """Advance the simulation world by dt seconds."""
         self.sim_time += dt
+
+        # 0. Advance 3D Target Auto-Patrol Loop if active
+        if self.patrol_active:
+            self.patrol_time += dt * self.patrol_speed
+            t = self.patrol_time
+            patrol_x = float(self.patrol_center[0] + self.patrol_scale[0] * math.cos(t))
+            patrol_y = float(self.patrol_center[1] + self.patrol_scale[1] * math.sin(2.0 * t) * 0.75)
+            patrol_z = float(max(15.0, self.patrol_center[2] + self.patrol_scale[2] * math.sin(t * 1.5)))
+            self.set_target([patrol_x, patrol_y, patrol_z])
 
         # 1. Comms & Packet Protocol from active Brain Plugin
         self.brain.update_comms(dt)
@@ -896,6 +912,14 @@ class SwarmSimulator:
         if hasattr(self.brain, "inject_target"):
             self.brain.inject_target(pos)
 
+    def toggle_target_patrol(self, active: Optional[bool] = None) -> bool:
+        """Toggle or explicitly set continuous 3D target auto-patrol loop."""
+        if active is not None:
+            self.patrol_active = bool(active)
+        else:
+            self.patrol_active = not self.patrol_active
+        return self.patrol_active
+
     # ==========================================================================
     # 7. Telemetry Snapshot Serialization
     # ==========================================================================
@@ -912,6 +936,7 @@ class SwarmSimulator:
             "brain": self.active_brain_name,
             "formation": getattr(self.brain, "formation_mode", self.formation_mode),
             "target": [round(float(v), 2) for v in self.target_pos],
+            "patrol_active": self.patrol_active,
             "tether": {
                 "anchor": [round(float(v), 2) for v in self.tether_anchor],
                 "leader_id": current_leader.id if current_leader else -1,

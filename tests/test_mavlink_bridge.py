@@ -113,6 +113,16 @@ class TestMavlinkBridge(unittest.TestCase):
             self.assertIn(1, responses[0]["purged_ids"])
             self.assertFalse(any(d.id == 1 for d in self.sim.drones))
 
+            # 5c. Test TOGGLE_PATROL
+            cmd_patrol = {"cmd": "TOGGLE_PATROL"}
+            sender.sendto(json.dumps(cmd_patrol).encode("utf-8"), (self.host, self.rx_port))
+
+            responses = self.bridge.poll_commands()
+            self.assertEqual(len(responses), 1)
+            self.assertEqual(responses[0]["status"], "OK")
+            self.assertTrue(responses[0]["patrol_active"])
+            self.assertTrue(self.sim.patrol_active)
+
         finally:
             sender.close()
 
