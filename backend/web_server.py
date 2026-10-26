@@ -146,13 +146,34 @@ class SwarmWebServer:
         if cmd in ("SET_TARGET", "DISPATCH_TARGET"):
             pos = cmd_dict.get("pos", [60.0, 40.0, 30.0])
             self.sim.patrol_active = False
-            self.sim.set_target(pos)
+            res = self.sim.set_target(pos)
+            if isinstance(res, dict) and res.get("status") == "OUT_OF_RANGE":
+                return {"status": "OUT_OF_RANGE", "cmd": cmd, "error": res.get("error")}
             return {"status": "OK", "cmd": "SET_TARGET", "target": pos, "patrol_active": False}
 
         elif cmd in ("TOGGLE_PATROL", "TOGGLE_TARGET_PATROL", "SET_PATROL"):
             active = cmd_dict.get("active", None)
             state = self.sim.toggle_target_patrol(active)
             return {"status": "OK", "cmd": cmd, "patrol_active": state}
+
+        elif cmd in ("SET_COMMS_MODE", "SET_MODE"):
+            mode = cmd_dict.get("mode", "TETHERED_RELAY")
+            ok = self.sim.set_comms_mode(mode)
+            return {
+                "status": "OK" if ok else "ERROR",
+                "cmd": cmd,
+                "comms_mode": self.sim.comms_mode,
+                "active_brain": self.sim.active_brain_name,
+            }
+
+        elif cmd in ("SET_RF_JAMMING", "SET_JAMMING"):
+            rate = float(cmd_dict.get("rate", cmd_dict.get("jamming", 0.0)))
+            jamming = self.sim.set_rf_jamming(rate)
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "rf_jamming": jamming,
+            }
 
         elif cmd == "SET_FORMATION":
             mode = cmd_dict.get("mode", "ECHELON_ESCORT")
@@ -246,7 +267,12 @@ class SwarmWebServer:
         elif cmd == "SET_BRAIN":
             name = cmd_dict.get("brain", "LEADER_FOLLOWER")
             ok = self.sim.set_brain(name)
-            return {"status": "OK" if ok else "INVALID_BRAIN", "cmd": cmd, "active_brain": self.sim.active_brain_name}
+            return {
+                "status": "OK" if ok else "INVALID_BRAIN",
+                "cmd": cmd,
+                "active_brain": self.sim.active_brain_name,
+                "comms_mode": self.sim.comms_mode,
+            }
 
         else:
             brain_res = self.sim.brain.handle_command(cmd_dict)

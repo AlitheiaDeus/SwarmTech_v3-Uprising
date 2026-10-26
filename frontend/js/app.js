@@ -128,7 +128,8 @@
     }
 
     function createTacticalRangeRings() {
-        const radii = [25, 50, 100];
+        // [25m, 50m, 100m, 120m GCS RF Uplink Horizon]
+        const radii = [25, 50, 100, 120];
         radii.forEach((r, idx) => {
             const curve = new THREE.EllipseCurve(
                 0, 0, r, r, 0, 2 * Math.PI, false, 0
@@ -137,13 +138,14 @@
             const geometry = new THREE.BufferGeometry().setFromPoints(
                 points.map(p => new THREE.Vector3(p.x, p.y, 0.05))
             );
+            const isGcsHorizon = (r === 120);
             const material = new THREE.LineDashedMaterial({
-                color: idx === 2 ? COLORS.ring100 : COLORS.ring25,
-                dashSize: 3,
-                gapSize: 2,
+                color: isGcsHorizon ? 0x00F0FF : (idx === 2 ? COLORS.ring100 : COLORS.ring25),
+                dashSize: isGcsHorizon ? 5 : 3,
+                gapSize: isGcsHorizon ? 3 : 2,
                 linewidth: 1,
                 transparent: true,
-                opacity: 0.65,
+                opacity: isGcsHorizon ? 0.85 : 0.65,
             });
             const line = new THREE.Line(geometry, material);
             line.computeLineDistances();
@@ -873,6 +875,12 @@
             return;
         }
 
+        // Wireless Modes (LEADER_FOLLOWER, GOSSIP_CONSENSUS): tether is not deployed
+        if (tetherData.visible === false && !tetherSeveredPrev) {
+            tetherMesh.visible = false;
+            return;
+        }
+
         const anchor = new THREE.Vector3(0, 0, 1.5);
 
         // Check if tether is severed or leader is gone (TKT-16)
@@ -945,11 +953,15 @@
     function updateTopBar(frame) {
         const simTimeElem = document.getElementById('hud-sim-time');
         const modeElem = document.getElementById('hud-mode');
+        const commsElem = document.getElementById('hud-comms');
         const brainElem = document.getElementById('hud-brain');
         const dronesElem = document.getElementById('hud-drones');
 
         if (simTimeElem && frame.sim_time !== undefined) {
             simTimeElem.textContent = `${frame.sim_time.toFixed(1)}s`;
+        }
+        if (commsElem && frame.comms_mode) {
+            commsElem.textContent = frame.comms_mode;
         }
         if (modeElem) {
             if (frame.recovery_stage === 'LANDING') {

@@ -27,6 +27,10 @@
       </div>
 
       <div class="status-pill">
+        COMMS: <strong id="hud-comms">TETHERED_RELAY</strong>
+      </div>
+
+      <div class="status-pill">
         BRAIN: <strong id="hud-brain">LEADER_FOLLOWER</strong>
       </div>
 
@@ -79,12 +83,26 @@
     </div>
     <div id="command-deck" class="panel-content scrollable">
 
-      <!-- Section: Pluggable Brain -->
+      <!-- Section: Swarm Comms & Architecture (TKT-17) -->
       <div class="control-group">
-        <div class="group-title">GUIDANCE BRAIN</div>
-        <div class="btn-grid-2">
-          <button id="btn-brain-lf" class="tactical-btn active-selection">LEADER-FOLLOWER</button>
-          <button id="btn-brain-gossip" class="tactical-btn">GOSSIP CONSENSUS</button>
+        <div class="group-title">&#x25C8; SWARM ARCHITECTURE</div>
+        <div class="btn-grid-3">
+          <button id="btn-mode-tether" class="tactical-btn active-selection" title="Hardline tethered leader, star RF followers, immune to EW jamming">TETHER RELAY</button>
+          <button id="btn-mode-star" class="tactical-btn" title="Untethered wireless RF star, leader has RF link to GCS">WIRELESS STAR</button>
+          <button id="btn-mode-mesh" class="tactical-btn" title="Decentralized wireless P2P mesh with multi-hop gossip consensus">P2P MESH</button>
+        </div>
+      </div>
+
+      <!-- Section: RF Channel & Electronic Warfare (PLN-03) -->
+      <div class="control-group rf-group">
+        <div class="group-title rf-title">&#x26A1; RF CHANNEL &amp; JAMMING</div>
+        <div class="slider-row">
+          <input type="range" id="rf-jamming-slider" min="0" max="50" value="0" step="5" class="tactical-slider">
+          <span id="rf-jamming-val" class="slider-val">0% JAMMING</span>
+        </div>
+        <div class="rf-stats-row">
+          <span>GCS HORIZON: <strong>120m</strong></span>
+          <span id="rf-env-status">RF: <strong>NOMINAL</strong></span>
         </div>
       </div>
 

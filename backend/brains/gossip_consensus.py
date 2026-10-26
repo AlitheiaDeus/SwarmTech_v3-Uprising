@@ -91,6 +91,15 @@ class GossipConsensusBrain(BaseBrain):
                 "echo_target": np.copy(state.pending_target),
             }
 
+        # Compute RSSI & Link Quality for each drone based on proximity to nearest peer or GCS anchor
+        for drone in active_drones:
+            distances = [float(np.linalg.norm(drone.pos - self.sim.tether_anchor))]
+            for peer in active_drones:
+                if peer.id != drone.id:
+                    distances.append(float(np.linalg.norm(drone.pos - peer.pos)))
+            min_dist = min(distances) if distances else 0.0
+            drone.rssi, drone.link_quality = self.sim.calculate_rssi(min_dist, is_hardline=False)
+
         # Simulate decentralized P2P RF broadcast over Euclidean RADIO_RANGE (120m)
         for drone in active_drones:
             drone_state = self._get_peer_state(drone.id)
@@ -102,6 +111,10 @@ class GossipConsensusBrain(BaseBrain):
                 dist = float(np.linalg.norm(drone.pos - peer.pos))
                 if dist > RADIO_RANGE:
                     continue  # Out of radio range
+
+                # Physics-based packet drop from path loss & EW jamming
+                if self.sim.is_packet_dropped(dist, is_hardline=False):
+                    continue
 
                 peer_pkt = packets[peer.id]
 
@@ -201,30 +214,45 @@ class GossipConsensusBrain(BaseBrain):
     # 3. Mission Directive Ingestion (Gossip Trigger)
     # ==========================================================================
     def inject_target(self, new_target: List[float]) -> Dict[str, Any]:
-        """Ingest new target command from GCS. Delivers to nearest drone in range,
-        which immediately begins echoing to its peers."""
-        self.current_seq += 1
+        """Ingest new target command from GCS. Delivers to nearest drone within GCS radio range (120m),
+        which immediately begins echoing to its peers across the mesh."""
         new_target_arr = np.array(new_target, dtype=float)
-        self.sim.target_pos = new_target_arr
 
-        # Find closest active drone to GCS anchor or target
+        # Find closest active drone within GCS radio range (120m)
         active_drones = [d for d in self.sim.drones if not d.crashed]
         if not active_drones:
-            return {"status": "NO_ACTIVE_DRONES"}
+            return {"status": "NO_ACTIVE_DRONES", "error": "No living drones in swarm"}
 
-        # Ingest into first active drone to initiate gossip propagation
-        first_drone = active_drones[0]
-        state = self._get_peer_state(first_drone.id)
+        drones_in_range = []
+        for d in active_drones:
+            dist_to_gcs = float(np.linalg.norm(d.pos - self.sim.tether_anchor))
+            if dist_to_gcs <= RADIO_RANGE:
+                drones_in_range.append((dist_to_gcs, d))
+
+        if not drones_in_range:
+            return {
+                "status": "OUT_OF_RANGE",
+                "error": f"No active drones within GCS radio range ({RADIO_RANGE}m)",
+            }
+
+        # Seed target into closest drone to GCS anchor
+        drones_in_range.sort(key=lambda item: item[0])
+        seed_drone = drones_in_range[0][1]
+
+        self.current_seq += 1
+        self.sim.target_pos = new_target_arr
+
+        state = self._get_peer_state(seed_drone.id)
         state.pending_seq = self.current_seq
         state.pending_target = np.copy(new_target_arr)
-        state.echo_ack_peers = {first_drone.id}
+        state.echo_ack_peers = {seed_drone.id}
         state.gossip_status = "PROPAGATING"
 
         return {
             "status": "OK",
             "cmd": "INJECT_TARGET",
             "seq": self.current_seq,
-            "seed_drone_id": first_drone.id,
+            "seed_drone_id": seed_drone.id,
             "target": [round(float(v), 2) for v in new_target_arr],
         }
 

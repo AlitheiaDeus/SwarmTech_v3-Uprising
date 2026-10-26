@@ -11,6 +11,7 @@ import time
 import os
 import sys
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any, Set
 
 # Ensure repository root is on sys.path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -109,6 +110,8 @@ class Drone:
         self.lost_link: bool = False
         self.lkp: np.ndarray = np.copy(self.pos)
         self.last_heartbeat_time: float = 0.0
+        self.rssi: float = -45.0           # Signal strength (dBm) (TKT-17)
+        self.link_quality: float = 1.0     # Normalized link quality [0.0, 1.0] (TKT-17)
 
         # Status & Battery
         self.battery: float = 100.0
@@ -150,6 +153,8 @@ class Drone:
         self.lost_link = False
         self.lkp = np.copy(self.pos)
         self.last_heartbeat_time = 0.0
+        self.rssi = -45.0
+        self.link_quality = 1.0
         self.battery = 100.0
         self.is_leader = is_leader
         self.status = "FLEET_LEADER" if is_leader else "ACTIVE"
@@ -184,6 +189,8 @@ class Drone:
             "flight_state": self.flight_state,
             "lost_link": self.lost_link,
             "lkp": [round(float(v), 2) for v in self.lkp],
+            "rssi": round(float(self.rssi), 1),
+            "link_quality": round(float(self.link_quality), 2),
             "battery": round(float(self.battery), 1),
             "status": self.status,
             "rotor_rpm": round(float(self.rotor_rpm), 0),
@@ -216,6 +223,8 @@ class SwarmSimulator:
         self.sim_time: float = 0.0
         self.last_heartbeat_broadcast: float = -1.0
         self.enable_packet_loss: bool = enable_packet_loss
+        self.comms_mode: str = "TETHERED_RELAY"  # "TETHERED_RELAY", "LEADER_FOLLOWER", "GOSSIP_CONSENSUS"
+        self.rf_jamming_rate: float = 0.0        # Electronic warfare RF jamming rate [0.0, 0.5]
 
         # Global Mission State
         self.formation_mode: str = "ECHELON_ESCORT"  # ECHELON_ESCORT, NATURAL_FLOCK, ORBIT_VORTEX, PERIMETER_PATROL
@@ -256,8 +265,76 @@ class SwarmSimulator:
             self.active_brain_name = key
             self.brain = BRAIN_REGISTRY[key](self)
             self.brain.reset()
+            if key == "GOSSIP_CONSENSUS":
+                self.comms_mode = "GOSSIP_CONSENSUS"
+            elif key == "LEADER_FOLLOWER" and self.comms_mode == "GOSSIP_CONSENSUS":
+                self.comms_mode = "LEADER_FOLLOWER"
             return True
         return False
+
+    def set_comms_mode(self, mode_name: str) -> bool:
+        """Switch comms mode: TETHERED_RELAY, LEADER_FOLLOWER, or GOSSIP_CONSENSUS."""
+        mode = mode_name.upper().replace("-", "_").replace(" ", "_")
+        if mode in ("TETHERED_RELAY", "TETHER_RELAY", "TETHERED"):
+            self.comms_mode = "TETHERED_RELAY"
+            if self.active_brain_name != "LEADER_FOLLOWER":
+                self.set_brain("LEADER_FOLLOWER")
+            return True
+        elif mode in ("LEADER_FOLLOWER", "WIRELESS_STAR", "STAR"):
+            self.comms_mode = "LEADER_FOLLOWER"
+            if self.active_brain_name != "LEADER_FOLLOWER":
+                self.set_brain("LEADER_FOLLOWER")
+            return True
+        elif mode in ("GOSSIP_CONSENSUS", "P2P_MESH", "MESH", "GOSSIP"):
+            self.comms_mode = "GOSSIP_CONSENSUS"
+            if self.active_brain_name != "GOSSIP_CONSENSUS":
+                self.set_brain("GOSSIP_CONSENSUS")
+            return True
+        return False
+
+    def set_rf_jamming(self, rate: float) -> float:
+        """Set electronic warfare RF jamming rate [0.0, 0.5]."""
+        self.rf_jamming_rate = float(np.clip(rate, 0.0, 0.5))
+        if self.rf_jamming_rate > 0.0:
+            self.enable_packet_loss = True
+        return self.rf_jamming_rate
+
+    def calculate_packet_drop_prob(self, distance: float, is_hardline: bool = False) -> float:
+        """Calculate packet loss probability using distance-dependent path loss and jamming.
+        P_loss(d) = gamma + (1 - gamma) * 0.25 * (d / R_max)^2"""
+        if is_hardline:
+            return 0.0
+        if distance > RADIO_RANGE:
+            return 1.0
+        if not self.enable_packet_loss and self.rf_jamming_rate <= 0.0:
+            return 0.0
+        gamma = self.rf_jamming_rate
+        norm_dist = distance / RADIO_RANGE
+        prob = gamma + (1.0 - gamma) * 0.25 * (norm_dist ** 2)
+        return float(np.clip(prob, 0.0, 1.0))
+
+    def is_packet_dropped(self, distance: float, is_hardline: bool = False) -> bool:
+        """Stochastically determine if packet is lost given distance and jamming rate."""
+        p = self.calculate_packet_drop_prob(distance, is_hardline)
+        if p <= 0.0:
+            return False
+        if p >= 1.0:
+            return True
+        return bool(np.random.random() < p)
+
+    def calculate_rssi(self, distance: float, is_hardline: bool = False) -> Tuple[float, float]:
+        """Calculate RSSI (dBm) and normalized link quality [0.0, 1.0].
+        Hardline fiber: -35.0 dBm, 1.0 quality.
+        Wireless: Free-space loss from -40.0 dBm at 1m with -40*gamma jamming penalty."""
+        if is_hardline:
+            return -35.0, 1.0
+        d = max(1.0, float(distance))
+        loss = 20.0 * math.log10(d)
+        jamming_penalty = 40.0 * self.rf_jamming_rate
+        rssi = -40.0 - loss - jamming_penalty
+        rssi = float(np.clip(rssi, -115.0, -35.0))
+        lq = max(0.0, min(1.0, (rssi - (-100.0)) / 60.0)) * (1.0 - self.rf_jamming_rate)
+        return round(rssi, 1), round(float(lq), 2)
 
     def _init_fleet(self, count: int) -> None:
         """Initialize leader and followers in safe starting formation."""
@@ -362,8 +439,8 @@ class SwarmSimulator:
         # 1. Comms & Packet Protocol from active Brain Plugin
         self.brain.update_comms(dt)
 
-        # 2. Check Tether Dynamics & Severance (LeaderFollowerBrain)
-        if self.active_brain_name == "LEADER_FOLLOWER":
+        # 2. Check Tether Dynamics & Severance (Tethered Relay Mode)
+        if self.comms_mode == "TETHERED_RELAY":
             self._update_tether_dynamics()
 
         # 3. Compute Guidance Targets from active Brain Plugin
@@ -376,7 +453,7 @@ class SwarmSimulator:
         # 5. Compute Tether Clearance Repulsion (if tethered)
         tether_accs = (
             self._compute_tether_avoidance()
-            if self.active_brain_name == "LEADER_FOLLOWER"
+            if self.comms_mode == "TETHERED_RELAY"
             else {d.id: np.zeros(3, dtype=float) for d in self.drones}
         )
 
@@ -606,24 +683,45 @@ class SwarmSimulator:
                 continue
 
             if drone.is_leader:
-                drone.lost_link = False
-                drone.last_heartbeat_time = self.sim_time
+                if self.comms_mode == "TETHERED_RELAY":
+                    drone.rssi, drone.link_quality = self.calculate_rssi(0.0, is_hardline=True)
+                    drone.lost_link = False
+                    drone.last_heartbeat_time = self.sim_time
+                else:
+                    # Wireless Star: Leader communicates with GCS base
+                    d_gcs = float(np.linalg.norm(drone.pos - self.tether_anchor))
+                    drone.rssi, drone.link_quality = self.calculate_rssi(d_gcs, is_hardline=False)
+                    if broadcast_tick:
+                        dropped = self.is_packet_dropped(d_gcs, is_hardline=False)
+                        in_range = d_gcs <= RADIO_RANGE
+                        if in_range and not dropped:
+                            drone.last_heartbeat_time = self.sim_time
+                            drone.lost_link = False
+                            drone.lkp = np.copy(drone.pos)
+                            if drone.status == "LOST_LINK":
+                                drone.status = "FLEET_LEADER"
+                    if self.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
+                        drone.lost_link = True
+                        drone.status = "LOST_LINK"
                 continue
 
             # Follower receiving leader heartbeat
-            if broadcast_tick and current_leader is not None:
+            if current_leader is not None:
                 dist_to_leader = float(np.linalg.norm(drone.pos - current_leader.pos))
-                in_range = dist_to_leader <= RADIO_RANGE
+                drone.rssi, drone.link_quality = self.calculate_rssi(dist_to_leader, is_hardline=False)
 
-                # Stochastic packet drop (if enabled, 1% baseline)
-                packet_dropped = self.enable_packet_loss and (np.random.random() < 0.01)
+                if broadcast_tick:
+                    in_range = dist_to_leader <= RADIO_RANGE
+                    packet_dropped = self.is_packet_dropped(dist_to_leader, is_hardline=False)
 
-                if in_range and not packet_dropped:
-                    drone.lkp = np.copy(current_leader.pos)
-                    drone.last_heartbeat_time = self.sim_time
-                    drone.lost_link = False
-                    if drone.status == "LOST_LINK":
-                        drone.status = "ACTIVE"
+                    if in_range and not packet_dropped:
+                        drone.lkp = np.copy(current_leader.pos)
+                        drone.last_heartbeat_time = self.sim_time
+                        drone.lost_link = False
+                        if drone.status == "LOST_LINK":
+                            drone.status = "ACTIVE"
+            else:
+                drone.rssi, drone.link_quality = -115.0, 0.0
 
             # Check lost-link timeout (1.0 second threshold)
             if self.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
@@ -636,6 +734,8 @@ class SwarmSimulator:
     def _update_tether_dynamics(self) -> None:
         """Check cable length limits and physical collisions by follower airframes.
         Physical contact <= 1.0m snaps cable and triggers autonomic succession."""
+        if self.comms_mode != "TETHERED_RELAY":
+            return
         current_leader = self.leader
         if current_leader is None or self.tether_severed:
             return
@@ -681,6 +781,8 @@ class SwarmSimulator:
     def _compute_tether_avoidance(self) -> Dict[int, np.ndarray]:
         """Apply lateral repulsion when followers enter the 3.0m cable clearance envelope."""
         accs = {d.id: np.zeros(3, dtype=float) for d in self.drones}
+        if self.comms_mode != "TETHERED_RELAY":
+            return accs
         current_leader = self.leader
 
         if current_leader is None or self.tether_severed:
@@ -1237,15 +1339,37 @@ class SwarmSimulator:
             if hasattr(self.brain, "formation_mode"):
                 self.brain.formation_mode = mode
 
-    def set_target(self, pos: List[float]) -> None:
+    def set_target(self, pos: List[float]) -> Dict[str, Any]:
         """Set global 3D mission target waypoint."""
-        self.target_pos = np.array(pos, dtype=float)
+        target_arr = np.array(pos, dtype=float)
+
+        # In LEADER_FOLLOWER, check if leader is within GCS radio range (120m)
+        if self.comms_mode == "LEADER_FOLLOWER":
+            current_leader = self.leader
+            if current_leader is not None:
+                d_gcs = float(np.linalg.norm(current_leader.pos - self.tether_anchor))
+                if d_gcs > RADIO_RANGE:
+                    return {
+                        "status": "OUT_OF_RANGE",
+                        "error": f"Leader Drone #{current_leader.id} ({d_gcs:.1f}m) out of GCS radio range ({RADIO_RANGE}m)",
+                    }
+
+        brain_res = None
+        if hasattr(self.brain, "inject_target"):
+            brain_res = self.brain.inject_target(pos)
+            if isinstance(brain_res, dict) and brain_res.get("status") == "OUT_OF_RANGE":
+                return brain_res
+
+        self.target_pos = target_arr
         # If user explicitly dispatches a new target away from base anchor, disengage RTB marshal
         if not np.allclose(self.target_pos, [0.0, 0.0, 25.0], atol=1.0):
             if self.overhead_marshal_active:
                 self.cancel_rtb()
-        if hasattr(self.brain, "inject_target"):
-            self.brain.inject_target(pos)
+
+        if isinstance(brain_res, dict):
+            return brain_res
+
+        return {"status": "OK", "target": [round(float(v), 2) for v in self.target_pos]}
 
     def toggle_target_patrol(self, active: Optional[bool] = None) -> bool:
         """Toggle or explicitly set continuous 3D target auto-patrol loop."""
@@ -1278,6 +1402,9 @@ class SwarmSimulator:
             "sim_time": round(float(self.sim_time), 3),
             "dt": DT,
             "brain": self.active_brain_name,
+            "comms_mode": self.comms_mode,
+            "rf_jamming": round(float(self.rf_jamming_rate), 2),
+            "gcs_radio_range": RADIO_RANGE,
             "formation": getattr(self.brain, "formation_mode", self.formation_mode),
             "target": [round(float(v), 2) for v in self.target_pos],
             "patrol_active": self.patrol_active,
@@ -1292,6 +1419,7 @@ class SwarmSimulator:
                 "leader_id": current_leader.id if current_leader else -1,
                 "severed": self.tether_severed,
                 "length": round(tether_len, 2),
+                "visible": (self.comms_mode == "TETHERED_RELAY" and not self.tether_severed),
             },
             "drones": drones_list,
             "brain_telemetry": self.brain.get_telemetry_extra(),

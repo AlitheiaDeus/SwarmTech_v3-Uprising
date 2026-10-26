@@ -12,6 +12,8 @@
     let currentLeaderId = null;
     let currentFormation = null;
     let currentBrain = null;
+    let currentCommsMode = null;
+    let isDraggingJammingSlider = false;
     let tetherSevered = false;
     let patrolActive = false;
     let swarmRtbActive = false;
@@ -52,7 +54,32 @@
     // 1. UI Event Listeners & Command Dispatch
     // =========================================================================
     function setupEventListeners() {
-        // Brain Selectors
+        // Swarm Architecture & Comms Selectors (TKT-17)
+        setupBtn('btn-mode-tether', () => dispatchCommsMode('TETHERED_RELAY'));
+        setupBtn('btn-mode-star', () => dispatchCommsMode('LEADER_FOLLOWER'));
+        setupBtn('btn-mode-mesh', () => dispatchCommsMode('GOSSIP_CONSENSUS'));
+
+        // Electronic Warfare & RF Jamming Slider (PLN-03)
+        const jammingSlider = document.getElementById('rf-jamming-slider');
+        const jammingVal = document.getElementById('rf-jamming-val');
+        const rfEnvStatus = document.getElementById('rf-env-status');
+        if (jammingSlider) {
+            jammingSlider.addEventListener('input', (e) => {
+                isDraggingJammingSlider = true;
+                const pct = parseInt(e.target.value);
+                const rate = pct / 100.0;
+                if (jammingVal) jammingVal.textContent = `${pct}% JAMMING`;
+                if (rfEnvStatus) {
+                    rfEnvStatus.innerHTML = pct > 0 ? `RF: <strong style="color:var(--neon-amber)">CONTESTED (${pct}%)</strong>` : `RF: <strong>NOMINAL</strong>`;
+                }
+                window.swarmClient?.send({ cmd: 'SET_RF_JAMMING', rate: rate });
+            });
+            jammingSlider.addEventListener('change', () => {
+                isDraggingJammingSlider = false;
+            });
+        }
+
+        // Brain Selectors (Legacy / Hot-swap)
         setupBtn('btn-brain-lf', () => dispatchBrain('LEADER_FOLLOWER'));
         setupBtn('btn-brain-gossip', () => dispatchBrain('GOSSIP_CONSENSUS'));
 
@@ -184,6 +211,11 @@
         }
     }
 
+    function dispatchCommsMode(modeName) {
+        logEvent('CMD', `Switching Swarm Architecture -> ${modeName}`);
+        window.swarmClient?.send({ cmd: 'SET_COMMS_MODE', mode: modeName });
+    }
+
     function dispatchBrain(brainName) {
         logEvent('CMD', `Hot-swapping Brain Architecture -> ${brainName}`);
         window.swarmClient?.send({ cmd: 'SET_BRAIN', brain: brainName });
@@ -213,6 +245,23 @@
     // =========================================================================
     function onTelemetry(frame) {
         if (!frame) return;
+
+        // 0. Update Comms Mode & RF Jamming (TKT-17)
+        if (frame.comms_mode && frame.comms_mode !== currentCommsMode) {
+            currentCommsMode = frame.comms_mode;
+            updateCommsButtons(currentCommsMode);
+        }
+        if (frame.rf_jamming !== undefined && !isDraggingJammingSlider) {
+            const pct = Math.round(frame.rf_jamming * 100);
+            const slider = document.getElementById('rf-jamming-slider');
+            const val = document.getElementById('rf-jamming-val');
+            const rfEnvStatus = document.getElementById('rf-env-status');
+            if (slider && parseInt(slider.value) !== pct) slider.value = pct;
+            if (val) val.textContent = `${pct}% JAMMING`;
+            if (rfEnvStatus) {
+                rfEnvStatus.innerHTML = pct > 0 ? `RF: <strong style="color:var(--neon-amber)">CONTESTED (${pct}%)</strong>` : `RF: <strong>NOMINAL</strong>`;
+            }
+        }
 
         // 1. Update Brain selection highlighting
         if (frame.brain && frame.brain !== currentBrain) {
@@ -451,6 +500,31 @@
         card.elBat.textContent = `${drone.battery.toFixed(0)}%`;
         card.elBatBar.style.width = `${Math.max(0, Math.min(100, drone.battery))}%`;
 
+        // Signal RSSI & Link Quality (TKT-17)
+        if (card.elRssi) {
+            const rssi = drone.rssi !== undefined ? drone.rssi.toFixed(0) : '-45';
+            const lq = drone.link_quality !== undefined ? drone.link_quality : 1.0;
+            card.elRssi.textContent = `${rssi}dBm`;
+            if (lq < 0.35) {
+                card.elRssi.style.color = 'var(--neon-red)';
+            } else if (lq < 0.7) {
+                card.elRssi.style.color = 'var(--neon-amber)';
+            } else {
+                card.elRssi.style.color = 'var(--neon-cyan)';
+            }
+            if (card.elSignalBar) {
+                const sigPct = Math.max(0, Math.min(100, Math.round(lq * 100)));
+                card.elSignalBar.style.width = `${sigPct}%`;
+                if (lq < 0.35) {
+                    card.elSignalBar.style.background = 'var(--neon-red)';
+                } else if (lq < 0.7) {
+                    card.elSignalBar.style.background = 'var(--neon-amber)';
+                } else {
+                    card.elSignalBar.style.background = 'linear-gradient(90deg, var(--neon-amber), var(--neon-cyan))';
+                }
+            }
+        }
+
         // Status Styling & Badges
         card.el.classList.remove('leader-card', 'crashed-card', 'lkp-card', 'gossip-card', 'takeoff-card', 'enroute-card', 'jettison-card', 'landed-card', 'landing-card', 'hold-card');
         card.elRole.className = 'drone-role-badge';
@@ -603,9 +677,18 @@
                     <span class="metric-label">BATTERY</span>
                     <strong class="metric-val metric-bat">100%</strong>
                 </div>
+                <div class="metric-col">
+                    <span class="metric-label">SIGNAL</span>
+                    <strong class="metric-val metric-rssi">-45dBm</strong>
+                </div>
             </div>
-            <div class="card-battery-progress">
-                <div class="card-battery-fill" style="width: 100%;"></div>
+            <div class="card-bars-container">
+                <div class="card-battery-progress" title="Battery Level">
+                    <div class="card-battery-fill" style="width: 100%;"></div>
+                </div>
+                <div class="card-signal-progress" title="RF Link Quality">
+                    <div class="card-signal-fill" style="width: 100%;"></div>
+                </div>
             </div>
             <div class="card-footer">
                 <button class="card-btn-action btn-land-action btn-land">LAND</button>
@@ -651,6 +734,8 @@
             elVel: el.querySelector('.metric-vel'),
             elBat: el.querySelector('.metric-bat'),
             elBatBar: el.querySelector('.card-battery-fill'),
+            elRssi: el.querySelector('.metric-rssi'),
+            elSignalBar: el.querySelector('.card-signal-fill'),
             elStatus: el.querySelector('.status-tag'),
             elRole: el.querySelector('.drone-role-badge'),
             elLandBtn: landBtn,
@@ -661,6 +746,22 @@
     // =========================================================================
     // 3. Selection Highlighting
     // =========================================================================
+    function updateCommsButtons(activeMode) {
+        const tetherBtn = document.getElementById('btn-mode-tether');
+        const starBtn = document.getElementById('btn-mode-star');
+        const meshBtn = document.getElementById('btn-mode-mesh');
+
+        [tetherBtn, starBtn, meshBtn].forEach(b => b?.classList.remove('active-selection'));
+
+        if (activeMode === 'TETHERED_RELAY') {
+            tetherBtn?.classList.add('active-selection');
+        } else if (activeMode === 'LEADER_FOLLOWER') {
+            starBtn?.classList.add('active-selection');
+        } else if (activeMode === 'GOSSIP_CONSENSUS') {
+            meshBtn?.classList.add('active-selection');
+        }
+    }
+
     function updateBrainButtons(activeBrain) {
         const lfBtn = document.getElementById('btn-brain-lf');
         const gossipBtn = document.getElementById('btn-brain-gossip');

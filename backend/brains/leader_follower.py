@@ -75,21 +75,44 @@ class LeaderFollowerBrain(BaseBrain):
                 continue
 
             if drone.is_leader:
-                drone.lost_link = False
-                drone.last_heartbeat_time = self.sim.sim_time
+                if self.sim.comms_mode == "TETHERED_RELAY":
+                    drone.rssi, drone.link_quality = self.sim.calculate_rssi(0.0, is_hardline=True)
+                    drone.lost_link = False
+                    drone.last_heartbeat_time = self.sim.sim_time
+                else:
+                    # Wireless Star: Leader communicates with GCS base anchor
+                    d_gcs = float(np.linalg.norm(drone.pos - self.sim.tether_anchor))
+                    drone.rssi, drone.link_quality = self.sim.calculate_rssi(d_gcs, is_hardline=False)
+                    if broadcast_tick:
+                        dropped = self.sim.is_packet_dropped(d_gcs, is_hardline=False)
+                        in_range = d_gcs <= RADIO_RANGE
+                        if in_range and not dropped:
+                            drone.last_heartbeat_time = self.sim.sim_time
+                            drone.lost_link = False
+                            drone.lkp = np.copy(drone.pos)
+                            if drone.status == "LOST_LINK":
+                                drone.status = "FLEET_LEADER"
+                    if self.sim.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
+                        drone.lost_link = True
+                        drone.status = "LOST_LINK"
                 continue
 
-            if broadcast_tick and current_leader is not None:
+            if current_leader is not None:
                 dist = float(np.linalg.norm(drone.pos - current_leader.pos))
-                in_range = dist <= RADIO_RANGE
-                dropped = self.sim.enable_packet_loss and (np.random.random() < 0.01)
+                drone.rssi, drone.link_quality = self.sim.calculate_rssi(dist, is_hardline=False)
 
-                if in_range and not dropped:
-                    drone.lkp = np.copy(current_leader.pos)
-                    drone.last_heartbeat_time = self.sim.sim_time
-                    drone.lost_link = False
-                    if drone.status == "LOST_LINK":
-                        drone.status = "ACTIVE"
+                if broadcast_tick:
+                    in_range = dist <= RADIO_RANGE
+                    dropped = self.sim.is_packet_dropped(dist, is_hardline=False)
+
+                    if in_range and not dropped:
+                        drone.lkp = np.copy(current_leader.pos)
+                        drone.last_heartbeat_time = self.sim.sim_time
+                        drone.lost_link = False
+                        if drone.status == "LOST_LINK":
+                            drone.status = "ACTIVE"
+            else:
+                drone.rssi, drone.link_quality = -115.0, 0.0
 
             if self.sim.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
                 drone.lost_link = True
@@ -112,6 +135,12 @@ class LeaderFollowerBrain(BaseBrain):
 
             # 1. Leader guidance: steer toward global mission target
             if drone.is_leader:
+                if drone.lost_link:
+                    accs[drone.id] = self._steer_toward(
+                        drone.pos, drone.vel, drone.lkp, max_speed=V_LKP
+                    )
+                    continue
+
                 # Smooth acceleration ramp if newly promoted to give retiring leader corridor clearance
                 if getattr(drone, "promotion_timer", 0.0) > 0.0:
                     drone.promotion_timer = max(0.0, drone.promotion_timer - dt)
