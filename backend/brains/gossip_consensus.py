@@ -21,6 +21,10 @@ V_CRUISE: float = 12.0
 QUORUM_RATIO: float = 0.75  # 75% consensus threshold required before transition
 
 
+DEADBAND_RADIUS: float = 0.35
+MAX_SLEW_RATE: float = math.radians(45.0)
+
+
 class DronePeerState:
     """Decentralized state tracked on each individual drone."""
 
@@ -40,7 +44,9 @@ class GossipConsensusBrain(BaseBrain):
     - No single fleet leader required.
     - Mission targets injected into any drone in range are echoed across the mesh.
     - Drones continue safe current trajectories while echoing (no sudden collision stops).
-    - Once quorum (>= 75%) is reached, all drones smoothly bank toward the new target."""
+    - Once quorum (>= 75%) is reached, all drones smoothly bank toward the new target.
+    - TKT-11: Structured decentralized swarm formations (Sentry Shell, Orbit Vortex,
+      Chevron Echelon, and Dispersed Lattice) computed deterministically from peer ID rankings."""
 
     brain_name: str = "GOSSIP_CONSENSUS"
 
@@ -49,11 +55,16 @@ class GossipConsensusBrain(BaseBrain):
         self.current_seq: int = 1
         self.peer_states: Dict[int, DronePeerState] = {}
         self.last_broadcast_tick: float = -1.0
+        self.formation_mode: str = getattr(sim, "formation_mode", "PERIMETER_PATROL")
+        self.formation_heading: float = 0.0
+        self.heading_initialized: bool = False
         self.reset()
 
     def reset(self) -> None:
         self.current_seq = 1
         self.peer_states.clear()
+        self.formation_heading = 0.0
+        self.heading_initialized = False
         for drone in self.sim.drones:
             self.peer_states[drone.id] = DronePeerState(
                 drone.id, self.sim.target_pos
@@ -151,35 +162,47 @@ class GossipConsensusBrain(BaseBrain):
         return self.peer_states[drone_id]
 
     # ==========================================================================
-    # 2. Decentralized Guidance Vector Computation
+    # 2. Decentralized Guidance Vector Computation (TKT-11 Formations)
     # ==========================================================================
     def compute_guidance(self, dt: float) -> Dict[int, np.ndarray]:
         """Compute guidance steering forces:
-        1. Mission Arrival Steering toward consensus active target.
+        1. Mission Arrival Steering toward consensus geometric slot offset.
         2. Local Flocking Cohesion & Alignment with nearby peers."""
         accs = {d.id: np.zeros(3, dtype=float) for d in self.sim.drones}
         active_drones = [
             d for d in self.sim.drones
             if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING")
         ]
+        living_count = len(active_drones)
+        if living_count == 0:
+            return accs
+
+        # Deterministic decentralized slot indexing based on living drone IDs
+        sorted_ids = sorted([d.id for d in active_drones])
+
+        # Update virtual swarm heading toward consensus target
+        consensus_target = self.sim.target_pos
+        self._update_formation_heading(active_drones, consensus_target, dt)
 
         for drone in active_drones:
             state = self._get_peer_state(drone.id)
+            k = sorted_ids.index(drone.id)
+            slot_pos = self._get_formation_slot(drone, k, living_count, state.active_target)
 
-            # 1. Target Pursuit: Arrive steering toward active target
+            # 1. Target Pursuit: Arrive steering toward decentralized geometric slot
             target_acc = self._steer_toward(
-                drone.pos, drone.vel, state.active_target, max_speed=V_CRUISE
+                drone.pos, drone.vel, slot_pos, max_speed=V_CRUISE
             )
 
-            # 2. Local Flocking Alignment (match velocity of peers within 20m)
+            # 2. Local Flocking Alignment (match velocity of peers within 15m)
             flock_acc = np.zeros(3, dtype=float)
             neighbor_count = 0
             for peer in active_drones:
                 if peer.id == drone.id:
                     continue
                 d = float(np.linalg.norm(drone.pos - peer.pos))
-                if d <= 20.0:
-                    flock_acc += (peer.vel - drone.vel) * 0.5
+                if d <= 15.0:
+                    flock_acc += (peer.vel - drone.vel) * 0.3
                     neighbor_count += 1
 
             if neighbor_count > 0:
@@ -189,17 +212,107 @@ class GossipConsensusBrain(BaseBrain):
 
         return accs
 
+    def _update_formation_heading(self, active_drones: List[Drone], target_pos: np.ndarray, dt: float) -> None:
+        """Update virtual swarm heading vector toward consensus target with smooth slew."""
+        if not active_drones:
+            return
+        centroid = np.mean([d.pos for d in active_drones], axis=0)
+        target_vec = target_pos - centroid
+        dist_xy = float(np.linalg.norm(target_vec[:2]))
+
+        patrol_active = getattr(self.sim, "patrol_active", False)
+        if not patrol_active and dist_xy < 2.0:
+            return  # Settle heading upon arrival
+
+        desired_yaw = math.atan2(target_vec[1], target_vec[0])
+        if not self.heading_initialized:
+            self.formation_heading = desired_yaw
+            self.heading_initialized = True
+            return
+
+        yaw_diff = (desired_yaw - self.formation_heading + math.pi) % (2.0 * math.pi) - math.pi
+        effective_slew_rate = math.radians(60.0) if patrol_active else MAX_SLEW_RATE
+        max_step = effective_slew_rate * dt
+        slew = float(np.clip(yaw_diff, -max_step, max_step))
+        self.formation_heading = (self.formation_heading + slew + math.pi) % (2.0 * math.pi) - math.pi
+
+    def _get_formation_slot(
+        self, drone: Drone, k: int, N: int, target_pos: np.ndarray
+    ) -> np.ndarray:
+        """Compute 3D position of decentralized geometric slot k in [0, N-1] (TKT-11).
+        Preserves wing-side continuity (odd k -> right wing, even k -> left wing)
+        to prevent cross-formation reciprocal collisions."""
+        if k == 0:
+            azimuth = 0.0
+        else:
+            side = 1.0 if (k % 2 == 1) else -1.0
+            pair = (k + 1) // 2
+            azimuth = side * pair * (2.0 * math.pi / max(1, N))
+
+        # Stage 1 Overhead Marshal: Equidistant holding ring around Base anchor (0, 0, 25m)
+        if getattr(self.sim, "overhead_marshal_active", False):
+            radius = 20.0
+            return np.array([radius * math.cos(azimuth), radius * math.sin(azimuth), 25.0], dtype=float)
+
+        if self.formation_mode == "PERIMETER_PATROL":
+            # Static defensive sentry ring holding equidistant guard stations around target (R = 25m)
+            radius = 25.0
+            return (
+                target_pos
+                + np.array([radius * math.cos(azimuth), radius * math.sin(azimuth), 0.0], dtype=float)
+            )
+
+        elif self.formation_mode == "ORBIT_VORTEX":
+            # Dynamic rotating ring around consensus target with altitude undulation
+            radius = 20.0
+            omega = 0.6
+            angle = omega * self.sim.sim_time + azimuth
+            z_offset = 3.0 * math.sin(2.0 * angle)
+            return (
+                target_pos
+                + np.array([radius * math.cos(angle), radius * math.sin(angle), z_offset], dtype=float)
+            )
+
+        elif self.formation_mode == "ECHELON_ESCORT":
+            # Chevron / V-formation centered on consensus target oriented along virtual heading
+            heading = np.array(
+                [math.cos(self.formation_heading), math.sin(self.formation_heading), 0.0], dtype=float
+            )
+            lateral = np.array([-heading[1], heading[0], 0.0], dtype=float)
+
+            if k == 0:
+                return target_pos
+
+            row = (k + 1) // 2
+            side = 1.0 if (k % 2 == 1) else -1.0
+            return (
+                target_pos
+                - (row * 6.0 * heading)
+                + (side * row * 6.0 * lateral)
+                + np.array([0.0, 0.0, row * 0.5], dtype=float)
+            )
+
+        else:
+            # NATURAL_FLOCK: Dispersed 2D/3D lattice around target to eliminate clumping
+            cols = max(1, int(math.ceil(math.sqrt(N))))
+            col = k % cols
+            row = k // cols
+            offset_x = (col - (cols - 1) / 2.0) * 8.0
+            offset_y = (row - (math.ceil(N / float(cols)) - 1) / 2.0) * 8.0
+            return target_pos + np.array([offset_x, offset_y, 0.0], dtype=float)
+
     @staticmethod
     def _steer_toward(
         current_pos: np.ndarray,
         current_vel: np.ndarray,
         target_pos: np.ndarray,
         max_speed: float,
-        arrival_radius: float = 8.0,
+        arrival_radius: float = 6.0,
+        deadband: float = DEADBAND_RADIUS,
     ) -> np.ndarray:
         offset = target_pos - current_pos
         dist = float(np.linalg.norm(offset))
-        if dist < 0.01:
+        if dist < deadband:
             return -current_vel * 3.0
 
         if dist < arrival_radius:
@@ -261,6 +374,11 @@ class GossipConsensusBrain(BaseBrain):
         if cmd in ("SET_TARGET", "DISPATCH_TARGET"):
             pos = cmd_dict.get("pos", [60.0, 40.0, 30.0])
             return self.inject_target(pos)
+        elif cmd == "SET_FORMATION":
+            mode = cmd_dict.get("mode", "PERIMETER_PATROL")
+            if mode in ("PERIMETER_PATROL", "ECHELON_ESCORT", "ORBIT_VORTEX", "NATURAL_FLOCK"):
+                self.formation_mode = mode
+                return {"status": "OK", "cmd": cmd, "formation": self.formation_mode}
         return None
 
     def get_telemetry_extra(self) -> Dict[str, Any]:
@@ -272,6 +390,7 @@ class GossipConsensusBrain(BaseBrain):
 
         return {
             "brain_mode": "GOSSIP_CONSENSUS",
+            "formation": self.formation_mode,
             "target_seq": self.current_seq,
             "propagating_drones": propagating_count,
             "consensus_reached": (propagating_count == 0),
