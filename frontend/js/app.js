@@ -876,8 +876,10 @@
         }
 
         // Wireless Modes (LEADER_FOLLOWER, GOSSIP_CONSENSUS): tether is not deployed
-        if (tetherData.visible === false && !tetherSeveredPrev) {
+        if (tetherData.deployed === false || (!tetherData.deployed && tetherData.visible === false && !tetherData.severed)) {
             tetherMesh.visible = false;
+            tetherSeveredPrev = false;
+            tetherDropProgress = 0.0;
             return;
         }
 
@@ -888,7 +890,11 @@
             if (!tetherSeveredPrev) {
                 tetherSeveredPrev = true;
                 tetherDropProgress = 0.0;
-                if (leaderEntry) {
+                // Umbilical was anchored to primary flagship Drone 0
+                const tetherDroneEntry = dronesMap.get(0);
+                if (tetherDroneEntry) {
+                    tetherLastTipPos.copy(tetherDroneEntry.currentPos);
+                } else if (leaderEntry) {
                     tetherLastTipPos.copy(leaderEntry.currentPos);
                 }
             }

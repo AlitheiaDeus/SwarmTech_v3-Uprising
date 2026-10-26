@@ -220,11 +220,16 @@ class TestSimCore(unittest.TestCase):
         self.sim.kill_leader()
 
         self.assertTrue(self.sim.drones[0].crashed)
+        self.assertTrue(self.sim.tether_severed)
+        self.assertTrue(self.sim.drones[0].tether_lost)
         new_leader = self.sim.leader
         self.assertIsNotNone(new_leader)
         self.assertEqual(new_leader.id, 1)
         self.assertEqual(new_leader.status, "PROMOTED_LEADER")
         self.assertTrue(new_leader.is_leader)
+        snapshot = self.sim.get_state_snapshot()
+        self.assertTrue(snapshot["tether"]["severed"])
+        self.assertFalse(snapshot["tether"]["visible"])
 
     def test_multi_mode_formations(self):
         """Verify dynamic switching between all 4 flight formation modes."""

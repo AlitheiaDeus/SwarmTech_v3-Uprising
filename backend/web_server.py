@@ -185,6 +185,14 @@ class SwarmWebServer:
             new_id = self.sim.leader.id if self.sim.leader else -1
             return {"status": "OK", "cmd": cmd, "new_leader_id": new_id}
 
+        elif cmd in ("CUT_TETHER", "JETTISON_TETHER", "SEVER_TETHER"):
+            self.sim.cut_tether()
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "tether_severed": self.sim.tether_severed,
+            }
+
         elif cmd == "KILL_DRONE":
             drone_id = int(cmd_dict.get("id", 1))
             self.sim.kill_drone(drone_id)

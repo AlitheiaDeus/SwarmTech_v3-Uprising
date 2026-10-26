@@ -248,6 +248,7 @@ class SwarmSimulator:
         self.patrol_time: float = 0.0
         self.patrol_center: np.ndarray = np.array([20.0, 20.0, 28.0], dtype=float)
         self.patrol_scale: np.ndarray = np.array([50.0, 35.0, 10.0], dtype=float)
+        self.last_gossip_inject_time: float = 0.0
 
         # Build Drone Fleet
         self.drones: List[Drone] = []
@@ -408,7 +409,22 @@ class SwarmSimulator:
             patrol_x = float(self.patrol_center[0] + self.patrol_scale[0] * math.cos(t))
             patrol_y = float(self.patrol_center[1] + self.patrol_scale[1] * math.sin(2.0 * t) * 0.75)
             patrol_z = float(max(15.0, self.patrol_center[2] + self.patrol_scale[2] * math.sin(t * 1.5)))
-            self.set_target([patrol_x, patrol_y, patrol_z])
+
+            should_update_target = True
+            if self.active_brain_name == "GOSSIP_CONSENSUS":
+                time_since_last = self.sim_time - self.last_gossip_inject_time
+                gossip_extra = self.brain.get_telemetry_extra()
+                consensus_reached = gossip_extra.get("consensus_reached", True)
+                # Allow gossip mesh to reach consensus and hold before issuing next patrol waypoint
+                if not consensus_reached and time_since_last < 2.5:
+                    should_update_target = False
+                elif time_since_last < 1.2:
+                    should_update_target = False
+
+            if should_update_target:
+                self.set_target([patrol_x, patrol_y, patrol_z])
+                if self.active_brain_name == "GOSSIP_CONSENSUS":
+                    self.last_gossip_inject_time = self.sim_time
 
         # 0b. Advance Doctrine A Lost-Link Loiter & Automated RTB Timer (TKT-16 / TKT-19)
         if self.tether_severed and not self.swarm_rtb_active:
@@ -1020,6 +1036,15 @@ class SwarmSimulator:
         drone.crashed = True
         drone.flight_state = "CRASHED"
         drone.status = "CRASHED"
+        if (drone.is_leader or drone.id == 0) and self.comms_mode == "TETHERED_RELAY":
+            if not self.tether_severed:
+                self.tether_severed = True
+                drone.tether_lost = True
+                drone.jettison_timer = 0.0
+                drone.tether_jettisoned = True
+                if self.lost_link_loiter_timer <= 0.0:
+                    self.lost_link_loiter_timer = 30.0
+                    self.swarm_rtb_active = False
         if drone.is_leader:
             drone.is_leader = False
             self._trigger_autonomic_succession(demote_old_leader=True)
@@ -1377,6 +1402,8 @@ class SwarmSimulator:
             self.patrol_active = bool(active)
         else:
             self.patrol_active = not self.patrol_active
+        if self.patrol_active:
+            self.last_gossip_inject_time = 0.0
         return self.patrol_active
 
     # ==========================================================================
@@ -1419,6 +1446,7 @@ class SwarmSimulator:
                 "leader_id": current_leader.id if current_leader else -1,
                 "severed": self.tether_severed,
                 "length": round(tether_len, 2),
+                "deployed": (self.comms_mode == "TETHERED_RELAY"),
                 "visible": (self.comms_mode == "TETHERED_RELAY" and not self.tether_severed),
             },
             "drones": drones_list,

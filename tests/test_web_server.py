@@ -135,6 +135,13 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(ack_kill_data.get("status"), "OK")
                 self.assertTrue(self.sim.drones[0].crashed)
 
+                # Send CUT_TETHER command
+                cmd_cut = {"cmd": "CUT_TETHER"}
+                await ws.send_str(json.dumps(cmd_cut))
+                ack_cut = await wait_for_ack(ws, "CUT_TETHER")
+                self.assertEqual(ack_cut.get("status"), "OK")
+                self.assertTrue(self.sim.tether_severed)
+
                 # Send REBOOT_ALL_DEAD command
                 cmd_reboot = {"cmd": "REBOOT_ALL_DEAD"}
                 await ws.send_str(json.dumps(cmd_reboot))

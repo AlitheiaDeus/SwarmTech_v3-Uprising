@@ -247,6 +247,30 @@ class TestBrains(unittest.TestCase):
         # Heading MUST have rotated towards +Y (pi/2) and NOT remained frozen at 0.0!
         self.assertGreater(brain.formation_heading, 0.05)
 
+    def test_gossip_autopatrol_consensus_convergence(self):
+        """Verify that during target auto-patrol in Gossip Consensus mode,
+        target injection is paced so that multi-hop quorum can settle,
+        avoiding 60 Hz sequence thrashing."""
+        sim = SwarmSimulator(drone_count=6)
+        sim.set_comms_mode("GOSSIP_CONSENSUS")
+        sim.toggle_target_patrol(True)
+        self.assertTrue(sim.patrol_active)
+
+        # Step 120 frames (2.0 simulated seconds)
+        for _ in range(120):
+            sim.step()
+
+        # In 120 steps, an unpaced sim would have injected 120 sequence increments.
+        # With consensus pacing, sequence increments should be reasonably throttled (e.g. <= 4).
+        gossip_brain = sim.brain
+        self.assertLessEqual(gossip_brain.current_seq, 4)
+        self.assertGreater(gossip_brain.current_seq, 0)
+
+        # Telemetry snapshot should show consensus reached periodically
+        snap = sim.get_state_snapshot()
+        self.assertEqual(snap["comms_mode"], "GOSSIP_CONSENSUS")
+        self.assertTrue(snap["brain_telemetry"]["consensus_reached"])
+
 
 if __name__ == "__main__":
     unittest.main()
