@@ -206,15 +206,42 @@ class SwarmWebServer:
             self.sim.reboot_fleet()
             return {"status": "OK", "cmd": cmd, "drone_count": len(self.sim.drones)}
 
-        elif cmd in ("CUT_TETHER", "JETTISON_TETHER", "SEVER_TETHER"):
-            self.sim.cut_tether()
-            two_ic = self.sim.get_2ic()
+        elif cmd in ("RTB_HOLD", "COMMAND_RTB_HOLD", "RETURN_TO_BASE_HOLD", "RTB"):
+            self.sim.command_rtb_hold()
             return {
                 "status": "OK",
                 "cmd": cmd,
-                "tether_severed": self.sim.tether_severed,
-                "two_ic_id": two_ic.id if two_ic else None,
+                "recovery_stage": self.sim.recovery_stage,
+                "overhead_marshal_active": self.sim.overhead_marshal_active,
             }
+
+        elif cmd in ("CANCEL_RTB", "RESUME_MISSION"):
+            self.sim.cancel_rtb()
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "recovery_stage": self.sim.recovery_stage,
+                "overhead_marshal_active": self.sim.overhead_marshal_active,
+            }
+
+        elif cmd in ("LAND_SWARM", "COMMAND_LAND_SWARM", "LAND_ALL"):
+            queued = self.sim.command_land_swarm()
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "queued_ids": queued,
+                "count": len(queued),
+            }
+
+        elif cmd in ("LAND_DRONE", "COMMAND_LAND_DRONE"):
+            drone_id = int(cmd_dict.get("id", cmd_dict.get("drone_id", 0)))
+            success = self.sim.command_land_drone(drone_id)
+            return {"status": "OK" if success else "ERROR", "cmd": cmd, "drone_id": drone_id}
+
+        elif cmd in ("TAKEOFF_DRONE", "RELAUNCH_DRONE"):
+            drone_id = int(cmd_dict.get("id", cmd_dict.get("drone_id", 0)))
+            success = self.sim.command_takeoff_drone(drone_id)
+            return {"status": "OK" if success else "ERROR", "cmd": cmd, "drone_id": drone_id}
 
         elif cmd == "SET_BRAIN":
             name = cmd_dict.get("brain", "LEADER_FOLLOWER")

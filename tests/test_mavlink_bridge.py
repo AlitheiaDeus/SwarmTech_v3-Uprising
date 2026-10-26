@@ -123,6 +123,22 @@ class TestMavlinkBridge(unittest.TestCase):
             self.assertTrue(responses[0]["patrol_active"])
             self.assertTrue(self.sim.patrol_active)
 
+            # 5d. Test RTB_HOLD (TKT-19)
+            cmd_rtb = {"cmd": "RTB_HOLD"}
+            sender.sendto(json.dumps(cmd_rtb).encode("utf-8"), (self.host, self.rx_port))
+            responses = self.bridge.poll_commands()
+            self.assertEqual(len(responses), 1)
+            self.assertEqual(responses[0]["status"], "OK")
+            self.assertTrue(self.sim.overhead_marshal_active)
+
+            # 5e. Test LAND_SWARM (TKT-19)
+            cmd_land = {"cmd": "LAND_SWARM"}
+            sender.sendto(json.dumps(cmd_land).encode("utf-8"), (self.host, self.rx_port))
+            responses = self.bridge.poll_commands()
+            self.assertEqual(len(responses), 1)
+            self.assertEqual(responses[0]["status"], "OK")
+            self.assertEqual(self.sim.recovery_stage, "LANDING")
+
         finally:
             sender.close()
 

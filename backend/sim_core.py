@@ -125,6 +125,12 @@ class Drone:
         self.tether_jettisoned: bool = False
         self.tether_failsafe_policy: str = "REJOIN"  # "REJOIN" or "RTB"
 
+        # Autonomous Swarm RTB & Coordinated Soft-Landing (TKT-19)
+        self.landing_pad_idx: Optional[int] = None
+        self.landing_pad: Optional[np.ndarray] = None
+        self.landing_wait_timer: float = 0.0
+        self.landing_stage: str = "NONE"  # "NONE", "WAITING_CLEARANCE", "APPROACH", "FINAL_DESCENT", "LANDED"
+
     def reset_state(
         self,
         pos: np.ndarray,
@@ -154,6 +160,10 @@ class Drone:
         self.jettison_timer = 0.0
         self.tether_jettisoned = False
         self.tether_failsafe_policy = "REJOIN"
+        self.landing_pad_idx = None
+        self.landing_pad = None
+        self.landing_wait_timer = 0.0
+        self.landing_stage = "NONE"
 
     def succession_score(self) -> int:
         """Calculate autonomic succession eligibility score: (Tier * 1000) - ID."""
@@ -181,6 +191,8 @@ class Drone:
             "tether_jettisoned": self.tether_jettisoned,
             "tether_lost": self.tether_lost,
             "tether_failsafe_policy": self.tether_failsafe_policy,
+            "landing_pad_idx": self.landing_pad_idx,
+            "landing_stage": self.landing_stage,
         }
 
 
@@ -216,6 +228,11 @@ class SwarmSimulator:
         self.lost_link_policy: str = "DOCTRINE_A"
         self.swarm_rtb_active: bool = False
 
+        # Autonomous Swarm RTB & Coordinated Soft-Landing (TKT-19)
+        self.overhead_marshal_active: bool = False
+        self.recovery_stage: str = "IDLE"  # "IDLE", "OVERHEAD_MARSHAL", "LANDING"
+        self.landing_pads: Dict[int, int] = {}  # pad_idx -> drone_id
+
         # Dynamic Target Auto-Patrol Loop (TKT-12)
         self.patrol_active: bool = False
         self.patrol_speed: float = 0.08  # Radians per second (~78s per loop)
@@ -248,6 +265,9 @@ class SwarmSimulator:
         self.tether_severed = False
         self.lost_link_loiter_timer = 0.0
         self.swarm_rtb_active = False
+        self.overhead_marshal_active = False
+        self.recovery_stage = "IDLE"
+        self.landing_pads.clear()
         self._highest_drone_id = count - 1
 
         # Leader #0 positioned at (0, 0, 20)
@@ -313,15 +333,13 @@ class SwarmSimulator:
             patrol_z = float(max(15.0, self.patrol_center[2] + self.patrol_scale[2] * math.sin(t * 1.5)))
             self.set_target([patrol_x, patrol_y, patrol_z])
 
-        # 0b. Advance Doctrine A Lost-Link Loiter & Automated RTB Timer (TKT-16)
+        # 0b. Advance Doctrine A Lost-Link Loiter & Automated RTB Timer (TKT-16 / TKT-19)
         if self.tether_severed and not self.swarm_rtb_active:
             if self.lost_link_loiter_timer > 0.0:
                 self.lost_link_loiter_timer = max(0.0, self.lost_link_loiter_timer - dt)
                 if self.lost_link_loiter_timer <= 0.0:
-                    # Loiter grace period expired: automated return to base
-                    self.swarm_rtb_active = True
-                    self.patrol_active = False
-                    self.set_target([0.0, 0.0, 25.0])
+                    # Loiter grace period expired: automated return to base (Stage 1 Overhead Marshal)
+                    self.command_rtb_hold()
 
         # 0c. Advance Drone Breakaway Jettison Timers (TKT-16)
         for drone in self.drones:
@@ -332,6 +350,14 @@ class SwarmSimulator:
                     drone.peel_off_timer = 0.0
                     if drone.status == "BREAKAWAY_JETTISON":
                         drone.status = "ACTIVE"
+
+        # 0d. Advance Drone Landing Stagger Clearance Timers (TKT-19)
+        for drone in self.drones:
+            if not drone.crashed and drone.flight_state == "DESCENDING":
+                if drone.landing_wait_timer > 0.0:
+                    drone.landing_wait_timer = max(0.0, drone.landing_wait_timer - dt)
+                    if drone.landing_wait_timer <= 0.0:
+                        drone.landing_stage = "APPROACH"
 
         # 1. Comms & Packet Protocol from active Brain Plugin
         self.brain.update_comms(dt)
@@ -354,7 +380,7 @@ class SwarmSimulator:
             else {d.id: np.zeros(3, dtype=float) for d in self.drones}
         )
 
-        # 5b. 3-Phase Flight State Machine Overrides (TAKEOFF -> EN_ROUTE -> CRUISE)
+        # 5b. Flight State Machine Overrides (TAKEOFF, EN_ROUTE, DESCENDING, LANDED)
         for drone in self.drones:
             if drone.crashed:
                 continue
@@ -394,6 +420,86 @@ class SwarmSimulator:
                 else:
                     drone.flight_state = "CRUISE"
 
+            elif drone.flight_state == "LANDED":
+                guidance_accs[drone.id] = np.zeros(3, dtype=float)
+                avoidance_accs[drone.id] = np.zeros(3, dtype=float)
+                tether_accs[drone.id] = np.zeros(3, dtype=float)
+                drone.vel = np.zeros(3, dtype=float)
+                drone.acc = np.zeros(3, dtype=float)
+                drone.rotor_rpm = 0.0
+
+            elif drone.flight_state == "DESCENDING":
+                if drone.landing_wait_timer > 0.0:
+                    drone.landing_stage = "WAITING_CLEARANCE"
+                    # Hold in overhead marshal pattern outside tether cylinder
+                    target_hold_z = 22.0 + (drone.landing_pad_idx or 0) * 0.5
+                    az_hold = float(np.clip(3.0 * (target_hold_z - drone.pos[2]) - 2.0 * drone.vel[2], -4.0, 4.0))
+                    guidance_accs[drone.id][2] = az_hold
+                else:
+                    pad_pos = (
+                        drone.landing_pad
+                        if drone.landing_pad is not None
+                        else self.get_pad_position(drone.landing_pad_idx or 0)
+                    )
+                    to_pad_xy = pad_pos[:2] - drone.pos[:2]
+                    dist_xy = float(np.linalg.norm(to_pad_xy))
+
+                    # 1. Horizontal Guidance toward Assigned Recovery Pad
+                    if dist_xy > 0.15:
+                        dir_xy = to_pad_xy / dist_xy
+                        v_target_xy = min(4.0, max(0.8, dist_xy * 1.5)) * dir_xy
+                        a_target_x = float(np.clip(3.5 * (v_target_xy[0] - drone.vel[0]), -6.0, 6.0))
+                        a_target_y = float(np.clip(3.5 * (v_target_xy[1] - drone.vel[1]), -6.0, 6.0))
+                    else:
+                        a_target_x = float(-5.0 * drone.vel[0])
+                        a_target_y = float(-5.0 * drone.vel[1])
+
+                    # 2. Vertical Guidance: 2-Stage Deceleration Sink Rate
+                    # Stage 1 Sink: vz = -1.5 m/s down to Z = 1.0m
+                    # Stage 2 Cushion: vz = -0.5 m/s from Z = 1.0m down to Z = 0.5m
+                    current_z = drone.pos[2]
+                    if dist_xy > 2.5:
+                        # Maintain safe approach altitude while closing horizontal distance
+                        target_vz = float(np.clip(2.0 * (15.0 - current_z), -1.5, 2.0))
+                        drone.landing_stage = "APPROACH"
+                    elif current_z > 1.0:
+                        target_vz = -1.5
+                        drone.landing_stage = "APPROACH"
+                    else:
+                        target_vz = -0.5
+                        drone.landing_stage = "FINAL_DESCENT"
+
+                    a_target_z = float(np.clip(4.0 * (target_vz - drone.vel[2]), -6.0, 6.0))
+                    guidance_accs[drone.id] = np.array([a_target_x, a_target_y, a_target_z], dtype=float)
+
+                    # Suppress horizontal avoidance near ground (Z < 3.0m) to allow clean pad docking
+                    if current_z < 3.0:
+                        avoidance_accs[drone.id][0] *= 0.1
+                        avoidance_accs[drone.id][1] *= 0.1
+
+                    # Touchdown Check: Z <= 0.52m and dist_xy <= 0.35m
+                    if current_z <= 0.52 and dist_xy <= 0.35:
+                        drone.pos = np.copy(pad_pos)
+                        drone.vel = np.zeros(3, dtype=float)
+                        drone.acc = np.zeros(3, dtype=float)
+                        drone.flight_state = "LANDED"
+                        drone.status = "LANDED"
+                        drone.landing_stage = "LANDED"
+                        drone.rotor_rpm = 0.0
+
+                        # Succession if landed drone was fleet leader
+                        if drone.is_leader:
+                            drone.is_leader = False
+                            living_airborne = [
+                                d for d in self.drones
+                                if not d.crashed and d.flight_state != "LANDED" and d.id != drone.id
+                            ]
+                            if living_airborne:
+                                successor = max(living_airborne, key=lambda d: d.succession_score())
+                                successor.is_leader = True
+                                successor.tier = TIER_LEADER
+                                successor.status = "FLEET_LEADER"
+
         # 6. Integrate Kinematics (Euler) & Boundary Clamps
         for drone in self.drones:
             if drone.crashed:
@@ -411,6 +517,15 @@ class SwarmSimulator:
                     drone.vel = np.zeros(3, dtype=float)
                     drone.acc = np.zeros(3, dtype=float)
                     drone.rotor_rpm = 0.0
+                continue
+
+            if drone.flight_state == "LANDED":
+                # Grounded on pad: motors disarmed, zero kinematics
+                drone.acc = np.zeros(3, dtype=float)
+                drone.vel = np.zeros(3, dtype=float)
+                if drone.landing_pad is not None:
+                    drone.pos = np.copy(drone.landing_pad)
+                drone.rotor_rpm = 0.0
                 continue
 
             # Sum and clamp accelerations
@@ -745,12 +860,12 @@ class SwarmSimulator:
 
         for i in range(n):
             drone_i = self.drones[i]
-            if drone_i.crashed:
+            if drone_i.crashed or drone_i.flight_state == "LANDED":
                 continue
 
             for j in range(i + 1, n):
                 drone_j = self.drones[j]
-                if drone_j.crashed:
+                if drone_j.crashed or drone_j.flight_state == "LANDED":
                     continue
 
                 diff = drone_i.pos - drone_j.pos
@@ -879,6 +994,107 @@ class SwarmSimulator:
     # ==========================================================================
     # 6. Mission Controls & Casualty Laboratory
     # ==========================================================================
+    @staticmethod
+    def get_pad_position(pad_idx: int) -> np.ndarray:
+        """Calculate coordinates for recovery/launch pad index.
+        Base pad layout outside the 3.0m tether clearance envelope.
+        Centered at (0.0, -6.0, 0.5) with multi-drone grid layout (>= 2.5m separation)."""
+        pad_x = float((pad_idx % 4 - 1.5) * 2.5)
+        pad_y = float(-6.0 - (pad_idx // 4) * 3.0)
+        return np.array([pad_x, pad_y, 0.5], dtype=float)
+
+    def command_rtb_hold(self) -> None:
+        """Stage 1 Recovery: Commanded RTB (Hold).
+        Fleet transits to Base (0, 0, 25m) at cruise speed and settles into
+        a stationary sentry ring at Z=20-25m outside 3m tether clearance cylinder."""
+        self.overhead_marshal_active = True
+        self.swarm_rtb_active = True
+        self.recovery_stage = "OVERHEAD_MARSHAL"
+        self.patrol_active = False
+        self.set_target([0.0, 0.0, 25.0])
+        for drone in self.drones:
+            if not drone.crashed and drone.flight_state not in ("LANDED", "DESCENDING"):
+                drone.flight_state = "OVERHEAD_HOLD"
+                drone.status = "OVERHEAD_HOLD"
+
+    def cancel_rtb(self) -> None:
+        """Cancel RTB / overhead marshaling and return living airborne drones to mission cruise."""
+        self.overhead_marshal_active = False
+        self.swarm_rtb_active = False
+        self.recovery_stage = "IDLE"
+        for drone in self.drones:
+            if not drone.crashed and drone.flight_state == "OVERHEAD_HOLD":
+                drone.flight_state = "CRUISE"
+                drone.status = "FLEET_LEADER" if drone.is_leader else "ACTIVE"
+
+    def command_land_swarm(self) -> List[int]:
+        """Stage 2 Recovery: Operator-authorized coordinated landing.
+        Engages ATC pad reservation and sequential staggered descent
+        (2.0s clearance intervals to eliminate prop wash down-drafts)."""
+        airborne_drones = [
+            d for d in self.drones
+            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING")
+        ]
+        if not airborne_drones:
+            return []
+
+        airborne_drones.sort(key=lambda d: d.id)
+        self.recovery_stage = "LANDING"
+        self.overhead_marshal_active = False
+
+        queued_ids = []
+        for i, drone in enumerate(airborne_drones):
+            # Find lowest unreserved pad
+            used_pads = set(self.landing_pads.keys())
+            pad_idx = 0
+            while pad_idx in used_pads:
+                pad_idx += 1
+            self.landing_pads[pad_idx] = drone.id
+            drone.landing_pad_idx = pad_idx
+            drone.landing_pad = self.get_pad_position(pad_idx)
+            drone.landing_wait_timer = i * 2.0  # 2.0s clearance intervals
+            drone.flight_state = "DESCENDING"
+            drone.status = "LANDING"
+            drone.landing_stage = "WAITING_CLEARANCE" if i > 0 else "APPROACH"
+            queued_ids.append(drone.id)
+
+        return queued_ids
+
+    def command_land_drone(self, drone_id: int) -> bool:
+        """Command an individual drone to land on an available recovery pad."""
+        for drone in self.drones:
+            if drone.id == drone_id and not drone.crashed and drone.flight_state not in ("LANDED", "DESCENDING"):
+                used_pads = set(self.landing_pads.keys())
+                pad_idx = 0
+                while pad_idx in used_pads:
+                    pad_idx += 1
+                self.landing_pads[pad_idx] = drone.id
+                drone.landing_pad_idx = pad_idx
+                drone.landing_pad = self.get_pad_position(pad_idx)
+                drone.landing_wait_timer = 0.0
+                drone.flight_state = "DESCENDING"
+                drone.status = "LANDING"
+                drone.landing_stage = "APPROACH"
+                return True
+        return False
+
+    def command_takeoff_drone(self, drone_id: int) -> bool:
+        """Relaunch a landed drone from its pad via vertical takeoff."""
+        for drone in self.drones:
+            if drone.id == drone_id and drone.flight_state == "LANDED":
+                drone.flight_state = "TAKEOFF"
+                drone.status = "ACTIVE"
+                drone.landing_stage = "NONE"
+                drone.rotor_rpm = 5200.0
+                drone.vel = np.zeros(3, dtype=float)
+                drone.acc = np.zeros(3, dtype=float)
+                if drone.landing_pad_idx is not None and drone.landing_pad_idx in self.landing_pads:
+                    del self.landing_pads[drone.landing_pad_idx]
+                drone.landing_pad_idx = None
+                drone.landing_pad = None
+                return True
+        return False
+
     def launch_reinforcement(self) -> Drone:
         """Deploy a new reinforcement drone from the base launch pad.
         Assigns the next sequential drone ID (max_id + 1).
@@ -889,11 +1105,8 @@ class SwarmSimulator:
         new_id = self._highest_drone_id
 
         # Base launch pad coordinates outside the 3.0m tether clearance envelope
-        # Pad centered at (0.0, -6.0, 0.5) with multi-drone grid layout (>= 2.5m separation)
         slot_idx = new_id % 8
-        pad_x = float((slot_idx % 4 - 1.5) * 2.5)
-        pad_y = float(-6.0 - (slot_idx // 4) * 3.0)
-        spawn_pos = np.array([pad_x, pad_y, 0.5], dtype=float)
+        spawn_pos = self.get_pad_position(slot_idx)
 
         drone = Drone(
             drone_id=new_id,
@@ -984,6 +1197,11 @@ class SwarmSimulator:
             for pid in purged_ids:
                 self.brain.peer_states.pop(pid, None)
 
+        # Clean up any pads held by purged drones
+        for pid in list(self.landing_pads.keys()):
+            if self.landing_pads[pid] in purged_ids:
+                del self.landing_pads[pid]
+
         # If fleet has surviving drones but no active leader, elect one
         if self.leader is None and self.drones:
             self._trigger_autonomic_succession(demote_old_leader=False)
@@ -995,6 +1213,9 @@ class SwarmSimulator:
         self._init_fleet(len(self.drones))
         self.lost_link_loiter_timer = 0.0
         self.swarm_rtb_active = False
+        self.overhead_marshal_active = False
+        self.recovery_stage = "IDLE"
+        self.landing_pads.clear()
         self.brain.reset()
 
     def cut_tether(self) -> None:
@@ -1019,6 +1240,10 @@ class SwarmSimulator:
     def set_target(self, pos: List[float]) -> None:
         """Set global 3D mission target waypoint."""
         self.target_pos = np.array(pos, dtype=float)
+        # If user explicitly dispatches a new target away from base anchor, disengage RTB marshal
+        if not np.allclose(self.target_pos, [0.0, 0.0, 25.0], atol=1.0):
+            if self.overhead_marshal_active:
+                self.cancel_rtb()
         if hasattr(self.brain, "inject_target"):
             self.brain.inject_target(pos)
 
@@ -1059,6 +1284,9 @@ class SwarmSimulator:
             "two_ic_id": two_ic_id,
             "lost_link_loiter_timer": round(max(0.0, float(self.lost_link_loiter_timer)), 1),
             "swarm_rtb_active": self.swarm_rtb_active,
+            "overhead_marshal_active": self.overhead_marshal_active,
+            "recovery_stage": self.recovery_stage,
+            "landing_pads": {int(k): v for k, v in self.landing_pads.items()},
             "tether": {
                 "anchor": [round(float(v), 2) for v in self.tether_anchor],
                 "leader_id": current_leader.id if current_leader else -1,

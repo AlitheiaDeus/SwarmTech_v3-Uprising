@@ -70,7 +70,10 @@ class GossipConsensusBrain(BaseBrain):
             return
         self.last_broadcast_tick = current_time
 
-        active_drones = [d for d in self.sim.drones if not d.crashed]
+        active_drones = [
+            d for d in self.sim.drones
+            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING")
+        ]
         living_count = len(active_drones)
         if living_count == 0:
             return
@@ -142,7 +145,10 @@ class GossipConsensusBrain(BaseBrain):
         1. Mission Arrival Steering toward consensus active target.
         2. Local Flocking Cohesion & Alignment with nearby peers."""
         accs = {d.id: np.zeros(3, dtype=float) for d in self.sim.drones}
-        active_drones = [d for d in self.sim.drones if not d.crashed]
+        active_drones = [
+            d for d in self.sim.drones
+            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING")
+        ]
 
         for drone in active_drones:
             state = self._get_peer_state(drone.id)

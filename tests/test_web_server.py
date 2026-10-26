@@ -182,6 +182,20 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(ack_patrol.get("patrol_active"))
                 self.assertTrue(self.sim.patrol_active)
 
+                # Send RTB_HOLD command (TKT-19)
+                cmd_rtb = {"cmd": "RTB_HOLD"}
+                await ws.send_str(json.dumps(cmd_rtb))
+                ack_rtb = await wait_for_ack(ws, "RTB_HOLD")
+                self.assertEqual(ack_rtb.get("status"), "OK")
+                self.assertTrue(self.sim.overhead_marshal_active)
+
+                # Send LAND_SWARM command (TKT-19)
+                cmd_land = {"cmd": "LAND_SWARM"}
+                await ws.send_str(json.dumps(cmd_land))
+                ack_land = await wait_for_ack(ws, "LAND_SWARM")
+                self.assertEqual(ack_land.get("status"), "OK")
+                self.assertEqual(self.sim.recovery_stage, "LANDING")
+
     async def test_sim_loop_fps_pacing(self):
         """Verify simulation ticker loop maintains locked ~60 FPS pacing without 30 FPS quantum drop."""
         import time

@@ -97,6 +97,7 @@
         createGcsMast();
         createTargetBeacon();
         createCatenaryTether();
+        createRecoveryPads();
 
         // 7. Event Listeners
         window.addEventListener('resize', onWindowResize);
@@ -253,6 +254,167 @@
     }
 
     // =========================================================================
+    // 2b. Tactical Ground Landing Pads & Air Traffic Control (TKT-19)
+    // =========================================================================
+    const landingPads = [];
+
+    function createRecoveryPads() {
+        const padsGroup = new THREE.Group();
+        padsGroup.name = 'recovery_pads';
+
+        for (let idx = 0; idx < 8; idx++) {
+            const col = idx % 4;
+            const row = Math.floor(idx / 4);
+            const x = (col - 1.5) * 2.8;
+            const y = -6.0 - row * 2.8;
+
+            const padGroup = new THREE.Group();
+            padGroup.position.set(x, y, 0);
+
+            // 1. Dark Slate Octagonal Base Pad (0.08m height, placed at ground)
+            const baseGeom = new THREE.CylinderGeometry(1.25, 1.35, 0.08, 8);
+            baseGeom.rotateX(Math.PI / 2);
+            const baseMat = new THREE.MeshStandardMaterial({
+                color: 0x0A1824,
+                metalness: 0.85,
+                roughness: 0.35,
+            });
+            const baseMesh = new THREE.Mesh(baseGeom, baseMat);
+            baseMesh.position.set(0, 0, 0.04);
+            padGroup.add(baseMesh);
+
+            // 2. Neon Cyan Octagonal Perimeter Ring
+            const ringGeom = new THREE.RingGeometry(1.12, 1.22, 8);
+            const ringMat = new THREE.MeshBasicMaterial({
+                color: 0x00F0FF,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.65,
+            });
+            const ringMesh = new THREE.Mesh(ringGeom, ringMat);
+            ringMesh.position.set(0, 0, 0.085);
+            padGroup.add(ringMesh);
+
+            // 3. Center Status Target Light & Decal (Vacant: Cyan, Approaching: Amber, Landed: Emerald)
+            const centerGeom = new THREE.CylinderGeometry(0.38, 0.38, 0.03, 16);
+            centerGeom.rotateX(Math.PI / 2);
+            const centerMat = new THREE.MeshStandardMaterial({
+                color: 0x00A0B0,
+                emissive: 0x00A0B0,
+                emissiveIntensity: 0.35,
+                transparent: true,
+                opacity: 0.6,
+            });
+            const centerMesh = new THREE.Mesh(centerGeom, centerMat);
+            centerMesh.position.set(0, 0, 0.09);
+            padGroup.add(centerMesh);
+
+            // 4. Inner Concentric Ring
+            const innerRingGeom = new THREE.RingGeometry(0.65, 0.72, 16);
+            const innerRingMat = new THREE.MeshBasicMaterial({
+                color: 0x00F0FF,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.35,
+            });
+            const innerRingMesh = new THREE.Mesh(innerRingGeom, innerRingMat);
+            innerRingMesh.position.set(0, 0, 0.088);
+            padGroup.add(innerRingMesh);
+
+            // 5. Pad Designation Marker Label ("PAD 0" .. "PAD 7")
+            const canvas = document.createElement('canvas');
+            canvas.width = 128;
+            canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = 'rgba(6, 16, 25, 0.8)';
+            ctx.fillRect(0, 0, 128, 64);
+            ctx.strokeStyle = '#00F0FF';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(3, 3, 122, 58);
+            ctx.fillStyle = '#00F0FF';
+            ctx.font = 'bold 24px "JetBrains Mono", Consolas, monospace';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(`PAD ${idx}`, 64, 32);
+
+            const labelTexture = new THREE.CanvasTexture(canvas);
+            const labelSpriteMat = new THREE.SpriteMaterial({
+                map: labelTexture,
+                transparent: true,
+                opacity: 0.85,
+            });
+            const labelSprite = new THREE.Sprite(labelSpriteMat);
+            labelSprite.scale.set(1.2, 0.6, 1);
+            labelSprite.position.set(0, -0.9, 0.35);
+            padGroup.add(labelSprite);
+
+            padsGroup.add(padGroup);
+
+            landingPads.push({
+                idx: idx,
+                group: padGroup,
+                baseMesh: baseMesh,
+                ringMesh: ringMesh,
+                centerMesh: centerMesh,
+                labelSprite: labelSprite,
+                status: 'VACANT',
+            });
+        }
+
+        scene.add(padsGroup);
+    }
+
+    function updateLandingPads(frame) {
+        if (!landingPads.length) return;
+
+        const droneMap = new Map();
+        if (Array.isArray(frame.drones)) {
+            frame.drones.forEach(d => droneMap.set(d.id, d));
+        }
+
+        landingPads.forEach(pad => {
+            let assignedDroneId = null;
+            if (frame.landing_pads && frame.landing_pads[pad.idx] !== undefined) {
+                assignedDroneId = frame.landing_pads[pad.idx];
+            }
+
+            const drone = assignedDroneId !== null ? droneMap.get(assignedDroneId) : null;
+            let status = 'VACANT';
+
+            if (drone && !drone.crashed) {
+                if (drone.flight_state === 'LANDED') {
+                    status = 'OCCUPIED';
+                } else if (drone.flight_state === 'DESCENDING') {
+                    status = 'APPROACHING';
+                }
+            }
+
+            pad.status = status;
+
+            if (status === 'OCCUPIED') {
+                pad.centerMesh.material.color.setHex(0x00FFAA);
+                pad.centerMesh.material.emissive.setHex(0x00FFAA);
+                pad.centerMesh.material.emissiveIntensity = 0.95;
+                pad.centerMesh.material.opacity = 0.95;
+                pad.ringMesh.material.color.setHex(0x00FFAA);
+            } else if (status === 'APPROACHING') {
+                const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.008);
+                pad.centerMesh.material.color.setHex(0xFFB800);
+                pad.centerMesh.material.emissive.setHex(0xFFB800);
+                pad.centerMesh.material.emissiveIntensity = 0.6 + 0.4 * pulse;
+                pad.centerMesh.material.opacity = 0.85;
+                pad.ringMesh.material.color.setHex(0xFFB800);
+            } else {
+                pad.centerMesh.material.color.setHex(0x00A0B0);
+                pad.centerMesh.material.emissive.setHex(0x00A0B0);
+                pad.centerMesh.material.emissiveIntensity = 0.25;
+                pad.centerMesh.material.opacity = 0.5;
+                pad.ringMesh.material.color.setHex(0x00F0FF);
+            }
+        });
+    }
+
+    // =========================================================================
     // 3. True 3D Quadcopter Mesh Builder
     // =========================================================================
     function buildQuadcopterMesh(isLeader) {
@@ -398,7 +560,7 @@
     function updateDroneBadge(sprite, d) {
         if (!sprite || !sprite.userData) return;
         const { canvas, texture } = sprite.userData;
-        const key = `${d.id}_${d.is_leader}_${d.crashed}_${d.lost_link}_${d.flight_state}_${d.status}_${d.is_2ic}`;
+        const key = `${d.id}_${d.is_leader}_${d.crashed}_${d.lost_link}_${d.flight_state}_${d.status}_${d.is_2ic}_${d.landing_pad_idx}`;
         if (sprite.userData.lastKey === key) return;
         sprite.userData.lastKey = key;
 
@@ -420,6 +582,22 @@
             labelText = `#${d.id}`;
             subText = 'CRASHED';
             dotColor = '#FF3366';
+        } else if (d.flight_state === 'LANDED') {
+            borderColor = '#00FFAA';
+            bgColor = 'rgba(4, 30, 20, 0.94)';
+            textColor = '#00FFAA';
+            labelText = `#${d.id}`;
+            const padStr = d.landing_pad_idx !== undefined && d.landing_pad_idx !== null ? `P${d.landing_pad_idx}` : 'PAD';
+            subText = `LANDED [${padStr}]`;
+            dotColor = '#00FFAA';
+        } else if (d.flight_state === 'DESCENDING') {
+            borderColor = '#FFB800';
+            bgColor = 'rgba(42, 28, 4, 0.94)';
+            textColor = '#FFD24D';
+            labelText = `#${d.id}`;
+            const padStr = d.landing_pad_idx !== undefined && d.landing_pad_idx !== null ? `P${d.landing_pad_idx}` : 'PAD';
+            subText = `LANDING [${padStr}]`;
+            dotColor = '#FFB800';
         } else if (d.status === 'BREAKAWAY_JETTISON') {
             borderColor = '#FFAA00';
             bgColor = 'rgba(42, 28, 4, 0.95)';
@@ -561,7 +739,9 @@
                         roll: d.roll || 0,
                         is_leader: d.is_leader,
                         crashed: d.crashed,
-                        rotorSpeed: d.crashed ? 0 : 0.4,
+                        flight_state: d.flight_state,
+                        landing_pad_idx: d.landing_pad_idx,
+                        rotorSpeed: (d.crashed || d.flight_state === 'LANDED') ? 0 : 0.4,
                     };
                     dronesMap.set(d.id, entry);
                 }
@@ -574,7 +754,9 @@
                 entry.crashed = d.crashed;
                 entry.is_leader = d.is_leader;
                 entry.status = d.status;
-                entry.rotorSpeed = d.crashed ? 0 : 0.45;
+                entry.flight_state = d.flight_state;
+                entry.landing_pad_idx = d.landing_pad_idx;
+                entry.rotorSpeed = (d.crashed || d.flight_state === 'LANDED') ? 0 : 0.45;
 
                 // Update 3D Tactical ID Badge
                 updateDroneBadge(entry.badge, d);
@@ -588,6 +770,14 @@
                     rotorColor = 0x661122; // Dim dead red
                     rotorOpacity = 0.2;
                     indicatorColor = COLORS.crashed;
+                } else if (d.flight_state === 'LANDED') {
+                    rotorColor = 0x00FFAA; // Soft emerald pad disarm
+                    rotorOpacity = 0.2;
+                    indicatorColor = 0x00FFAA;
+                } else if (d.flight_state === 'DESCENDING') {
+                    rotorColor = 0xFFB800; // Amber descent
+                    rotorOpacity = 0.6;
+                    indicatorColor = 0xFFB800;
                 } else if (d.status === 'BREAKAWAY_JETTISON') {
                     rotorColor = 0xFFAA00; // Bright amber jettison
                     rotorOpacity = 0.7;
@@ -666,6 +856,9 @@
 
         // Update Dynamic Catenary Tether
         updateTetherCurve(frame.tether, currentLeaderDrone);
+
+        // Update Tactical Landing Pads (TKT-19)
+        updateLandingPads(frame);
     }
 
     let tetherSeveredPrev = false;
@@ -758,8 +951,14 @@
         if (simTimeElem && frame.sim_time !== undefined) {
             simTimeElem.textContent = `${frame.sim_time.toFixed(1)}s`;
         }
-        if (modeElem && frame.formation) {
-            modeElem.textContent = frame.formation;
+        if (modeElem) {
+            if (frame.recovery_stage === 'LANDING') {
+                modeElem.textContent = 'ATC SOFT-LANDING';
+            } else if (frame.overhead_marshal_active) {
+                modeElem.textContent = 'OVERHEAD HOLD (25m)';
+            } else if (frame.formation) {
+                modeElem.textContent = frame.formation;
+            }
         }
         if (brainElem && frame.brain) {
             brainElem.textContent = frame.brain;
@@ -801,8 +1000,8 @@
             entry.mesh.rotation.y = entry.targetPitch;
             entry.mesh.rotation.x = entry.targetRoll;
 
-            // Spin rotors around Z axis
-            if (entry.mesh.userData.rotors && !entry.crashed) {
+            // Spin rotors around Z axis (disarmed when crashed or landed)
+            if (entry.mesh.userData.rotors && !entry.crashed && entry.flight_state !== 'LANDED') {
                 entry.mesh.userData.rotors.forEach((rotor, idx) => {
                     const dir = (idx % 2 === 0) ? 1 : -1;
                     rotor.rotation.z += entry.rotorSpeed * dir;
@@ -812,7 +1011,7 @@
             // Update 3D World Drop-Line from (x, y, z) down to (x, y, 0)
             if (entry.dropLine) {
                 const p = entry.currentPos;
-                if (p.z > 0.3 && !entry.crashed) {
+                if (p.z > 0.6 && !entry.crashed && entry.flight_state !== 'LANDED') {
                     entry.dropLine.visible = true;
                     entry.dropLine.geometry.setFromPoints([
                         new THREE.Vector3(p.x, p.y, p.z),
@@ -829,7 +1028,7 @@
                 const p = entry.currentPos;
                 entry.shadow.position.set(p.x, p.y, 0.05);
                 entry.shadow.rotation.set(0, 0, 0);
-                entry.shadow.visible = !entry.crashed || p.z > 0.3;
+                entry.shadow.visible = (!entry.crashed && entry.flight_state !== 'LANDED') || p.z > 0.6;
             }
 
             // Update 3D Tactical ID Badge Position (floating plumb 1.35m above drone)
@@ -848,6 +1047,16 @@
                 ring.scale.set(scale, scale, 1);
                 ring.position.z = -targetBeacon.position.z + 0.05;
             }
+        }
+
+        // 2b. Animate Approaching Landing Pads Pulse
+        if (landingPads.length) {
+            const padPulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.008);
+            landingPads.forEach(pad => {
+                if (pad.status === 'APPROACHING') {
+                    pad.centerMesh.material.emissiveIntensity = 0.5 + 0.5 * padPulse;
+                }
+            });
         }
 
         // 3. Chase Camera Logic

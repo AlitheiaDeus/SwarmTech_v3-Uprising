@@ -15,11 +15,15 @@
     let tetherSevered = false;
     let patrolActive = false;
     let swarmRtbActive = false;
+    let overheadMarshalActive = false;
+    let recoveryStage = 'IDLE';
     const deadDroneIds = new Set();
     const lostLinkIds = new Set();
     const takeoffDroneIds = new Set();
     const enrouteDroneIds = new Set();
     const jettisonDroneIds = new Set();
+    const landedDroneIds = new Set();
+    const descendingDroneIds = new Set();
 
     // DOM Elements
     let cardsContainer = null;
@@ -78,6 +82,22 @@
                 dispatchTarget([x, y, z], 'CUSTOM_COORD');
             });
         }
+
+        // 2-Stage Tactical Recovery & Soft-Landing Controls (TKT-19)
+        setupBtn('btn-rtb-hold', () => {
+            logEvent('CMD', 'Initiating Stage 1: Swarm RTB to overhead sentry hold (0,0,25)');
+            window.swarmClient?.send({ cmd: 'RTB_HOLD' });
+        });
+
+        setupBtn('btn-land-swarm', () => {
+            logEvent('CMD', 'Engaging Stage 2: Swarm ATC landing pad allocation & staggered soft-landing');
+            window.swarmClient?.send({ cmd: 'LAND_SWARM' });
+        });
+
+        setupBtn('btn-cancel-rtb', () => {
+            logEvent('CMD', 'Cancelling recovery: Resuming normal swarm cruise');
+            window.swarmClient?.send({ cmd: 'CANCEL_RTB' });
+        });
 
         // Casualty Lab Controls
         setupBtn('btn-kill-leader', () => {
@@ -239,7 +259,46 @@
                     logEvent('STATUS', '3D Target Auto-Patrol Loop DISENGAGED.');
                 }
             }
-        // 4. Update Top Bar Failsafe Indicator (TKT-16)
+        }
+
+        // 4c. Monitor Tactical Recovery & Soft-Landing (TKT-19)
+        const marshalActive = !!frame.overhead_marshal_active;
+        const stage = frame.recovery_stage || 'IDLE';
+
+        if (marshalActive !== overheadMarshalActive) {
+            overheadMarshalActive = marshalActive;
+            const btnRtb = document.getElementById('btn-rtb-hold');
+            if (btnRtb) {
+                btnRtb.classList.toggle('active-recovery', overheadMarshalActive);
+            }
+            if (overheadMarshalActive) {
+                logEvent('RECOVERY', 'Stage 1: Swarm transiting to Base (0, 0, 25m) overhead marshal hold.');
+            }
+        }
+
+        if (stage !== recoveryStage) {
+            recoveryStage = stage;
+            const btnLand = document.getElementById('btn-land-swarm');
+            if (btnLand) {
+                btnLand.classList.toggle('active-recovery', recoveryStage === 'LANDING');
+            }
+            if (recoveryStage === 'LANDING') {
+                logEvent('RECOVERY', 'Stage 2: Coordinated ATC Soft-Landing initiated with 2.0s stagger intervals.');
+            } else if (recoveryStage === 'IDLE' && !overheadMarshalActive) {
+                logEvent('STATUS', 'Recovery sequence cleared. Fleet in normal cruise.');
+            }
+        }
+
+        const btnCancelRtb = document.getElementById('btn-cancel-rtb');
+        if (btnCancelRtb) {
+            if (overheadMarshalActive || recoveryStage === 'LANDING') {
+                btnCancelRtb.style.display = 'block';
+            } else {
+                btnCancelRtb.style.display = 'none';
+            }
+        }
+
+        // 4d. Update Top Bar Failsafe Indicator (TKT-16)
         const failsafePill = document.getElementById('hud-failsafe-pill');
         const failsafeText = document.getElementById('hud-failsafe-text');
         if (failsafePill && failsafeText) {
@@ -293,6 +352,8 @@
                     lostLinkIds.delete(id);
                     takeoffDroneIds.delete(id);
                     enrouteDroneIds.delete(id);
+                    landedDroneIds.delete(id);
+                    descendingDroneIds.delete(id);
                 }
             }
 
@@ -325,6 +386,23 @@
                 } else if (d.flight_state === 'CRUISE' && enrouteDroneIds.has(d.id)) {
                     enrouteDroneIds.delete(d.id);
                     logEvent('STATUS', `Drone #${d.id} reached formation slot. Status: CRUISE.`);
+                }
+
+                if (d.flight_state === 'DESCENDING' && !descendingDroneIds.has(d.id)) {
+                    descendingDroneIds.add(d.id);
+                    const padStr = d.landing_pad_idx !== undefined && d.landing_pad_idx !== null ? `Pad #${d.landing_pad_idx}` : 'designated pad';
+                    logEvent('ATC', `Drone #${d.id} allocated ${padStr}. Commencing 2-stage deceleration descent.`);
+                } else if (d.flight_state !== 'DESCENDING' && descendingDroneIds.has(d.id)) {
+                    descendingDroneIds.delete(d.id);
+                }
+
+                if (d.flight_state === 'LANDED' && !landedDroneIds.has(d.id)) {
+                    landedDroneIds.add(d.id);
+                    const padStr = d.landing_pad_idx !== undefined && d.landing_pad_idx !== null ? `Pad #${d.landing_pad_idx}` : 'pad';
+                    logEvent('TOUCHDOWN', `Drone #${d.id} touched down on ${padStr}. Motors disarmed (0 RPM).`);
+                } else if (d.flight_state !== 'LANDED' && landedDroneIds.has(d.id)) {
+                    landedDroneIds.delete(d.id);
+                    logEvent('TAKEOFF', `Drone #${d.id} launching from pad. Rejoining swarm.`);
                 }
 
                 if (d.lost_link && !lostLinkIds.has(d.id)) {
@@ -374,7 +452,7 @@
         card.elBatBar.style.width = `${Math.max(0, Math.min(100, drone.battery))}%`;
 
         // Status Styling & Badges
-        card.el.classList.remove('leader-card', 'crashed-card', 'lkp-card', 'gossip-card', 'takeoff-card', 'enroute-card', 'jettison-card');
+        card.el.classList.remove('leader-card', 'crashed-card', 'lkp-card', 'gossip-card', 'takeoff-card', 'enroute-card', 'jettison-card', 'landed-card', 'landing-card', 'hold-card');
         card.elRole.className = 'drone-role-badge';
 
         if (drone.crashed) {
@@ -384,26 +462,64 @@
             card.elRole.textContent = 'DESTROYED';
             card.elActionBtn.textContent = 'REBOOT';
             card.elActionBtn.className = 'card-btn-action btn-reboot';
+            if (card.elLandBtn) card.elLandBtn.style.display = 'none';
+        } else if (drone.flight_state === 'LANDED') {
+            card.el.classList.add('landed-card');
+            const padStr = drone.landing_pad_idx !== undefined && drone.landing_pad_idx !== null ? `P${drone.landing_pad_idx}` : '';
+            card.elStatus.textContent = padStr ? `LANDED [${padStr}]` : 'LANDED';
+            card.elStatus.className = 'status-tag tag-landed';
+            card.elRole.textContent = 'DISARMED';
+            if (card.elLandBtn) {
+                card.elLandBtn.style.display = 'inline-block';
+                card.elLandBtn.textContent = 'LAUNCH';
+                card.elLandBtn.className = 'card-btn-action btn-launch';
+            }
+            card.elActionBtn.textContent = 'KILL';
+            card.elActionBtn.className = 'card-btn-action btn-kill';
+        } else if (drone.flight_state === 'DESCENDING') {
+            card.el.classList.add('landing-card');
+            const padStr = drone.landing_pad_idx !== undefined && drone.landing_pad_idx !== null ? `P${drone.landing_pad_idx}` : '';
+            card.elStatus.textContent = padStr ? `LANDING [${padStr}]` : 'LANDING';
+            card.elStatus.className = 'status-tag tag-landing';
+            card.elRole.textContent = 'ATC DESCENT';
+            if (card.elLandBtn) {
+                card.elLandBtn.style.display = 'inline-block';
+                card.elLandBtn.textContent = 'LANDING';
+                card.elLandBtn.className = 'card-btn-action btn-landing-busy';
+            }
+            card.elActionBtn.textContent = 'KILL';
+            card.elActionBtn.className = 'card-btn-action btn-kill';
         } else if (drone.status === 'BREAKAWAY_JETTISON') {
             card.el.classList.add('jettison-card');
             card.elStatus.textContent = 'JETTISONING';
             card.elStatus.className = 'status-tag tag-jettison';
             card.elRole.textContent = '⏏ JETTISON';
             card.elRole.classList.add('badge-jettison');
+            if (card.elLandBtn) card.elLandBtn.style.display = 'none';
             card.elActionBtn.textContent = 'KILL';
             card.elActionBtn.className = 'card-btn-action btn-kill';
         } else if (drone.is_leader) {
             card.el.classList.add('leader-card');
-            card.elStatus.textContent = 'LEADER';
-            card.elStatus.className = 'status-tag tag-leader';
+            card.elStatus.textContent = overheadMarshalActive ? 'OVERHEAD HOLD' : 'LEADER';
+            card.elStatus.className = overheadMarshalActive ? 'status-tag tag-hold' : 'status-tag tag-leader';
             card.elRole.textContent = 'FLAGSHIP';
+            if (card.elLandBtn) {
+                card.elLandBtn.style.display = 'inline-block';
+                card.elLandBtn.textContent = 'LAND';
+                card.elLandBtn.className = 'card-btn-action btn-land';
+            }
             card.elActionBtn.textContent = 'KILL';
             card.elActionBtn.className = 'card-btn-action btn-kill';
         } else if (drone.is_2ic) {
-            card.elStatus.textContent = 'ACTIVE';
-            card.elStatus.className = 'status-tag tag-active';
+            card.elStatus.textContent = overheadMarshalActive ? 'OVERHEAD HOLD' : 'ACTIVE';
+            card.elStatus.className = overheadMarshalActive ? 'status-tag tag-hold' : 'status-tag tag-active';
             card.elRole.textContent = '2IC';
             card.elRole.classList.add('badge-2ic');
+            if (card.elLandBtn) {
+                card.elLandBtn.style.display = 'inline-block';
+                card.elLandBtn.textContent = 'LAND';
+                card.elLandBtn.className = 'card-btn-action btn-land';
+            }
             card.elActionBtn.textContent = 'KILL';
             card.elActionBtn.className = 'card-btn-action btn-kill';
         } else if (drone.flight_state === 'TAKEOFF') {
@@ -411,6 +527,7 @@
             card.elStatus.textContent = 'TAKEOFF';
             card.elStatus.className = 'status-tag tag-takeoff';
             card.elRole.textContent = 'REINFORCE';
+            if (card.elLandBtn) card.elLandBtn.style.display = 'none';
             card.elActionBtn.textContent = 'KILL';
             card.elActionBtn.className = 'card-btn-action btn-kill';
         } else if (drone.flight_state === 'EN_ROUTE') {
@@ -418,6 +535,11 @@
             card.elStatus.textContent = 'EN ROUTE';
             card.elStatus.className = 'status-tag tag-enroute';
             card.elRole.textContent = `TIER-${drone.tier}`;
+            if (card.elLandBtn) {
+                card.elLandBtn.style.display = 'inline-block';
+                card.elLandBtn.textContent = 'LAND';
+                card.elLandBtn.className = 'card-btn-action btn-land';
+            }
             card.elActionBtn.textContent = 'KILL';
             card.elActionBtn.className = 'card-btn-action btn-kill';
         } else if (drone.lost_link) {
@@ -425,6 +547,7 @@
             card.elStatus.textContent = 'LKP RECOVERY';
             card.elStatus.className = 'status-tag tag-lkp';
             card.elRole.textContent = `TIER-${drone.tier}`;
+            if (card.elLandBtn) card.elLandBtn.style.display = 'none';
             card.elActionBtn.textContent = 'KILL';
             card.elActionBtn.className = 'card-btn-action btn-kill';
         } else if (drone.status === 'PROPAGATING') {
@@ -432,12 +555,22 @@
             card.elStatus.textContent = 'ECHO WAVE';
             card.elStatus.className = 'status-tag tag-gossip';
             card.elRole.textContent = `TIER-${drone.tier}`;
+            if (card.elLandBtn) {
+                card.elLandBtn.style.display = 'inline-block';
+                card.elLandBtn.textContent = 'LAND';
+                card.elLandBtn.className = 'card-btn-action btn-land';
+            }
             card.elActionBtn.textContent = 'KILL';
             card.elActionBtn.className = 'card-btn-action btn-kill';
         } else {
-            card.elStatus.textContent = 'ACTIVE';
-            card.elStatus.className = 'status-tag tag-active';
+            card.elStatus.textContent = overheadMarshalActive ? 'OVERHEAD HOLD' : 'ACTIVE';
+            card.elStatus.className = overheadMarshalActive ? 'status-tag tag-hold' : 'status-tag tag-active';
             card.elRole.textContent = `TIER-${drone.tier}`;
+            if (card.elLandBtn) {
+                card.elLandBtn.style.display = 'inline-block';
+                card.elLandBtn.textContent = 'LAND';
+                card.elLandBtn.className = 'card-btn-action btn-land';
+            }
             card.elActionBtn.textContent = 'KILL';
             card.elActionBtn.className = 'card-btn-action btn-kill';
         }
@@ -475,11 +608,14 @@
                 <div class="card-battery-fill" style="width: 100%;"></div>
             </div>
             <div class="card-footer">
+                <button class="card-btn-action btn-land-action btn-land">LAND</button>
                 <button class="card-btn-action btn-kill">KILL</button>
             </div>
         `;
 
-        const actionBtn = el.querySelector('.card-btn-action');
+        const actionBtn = el.querySelector('.btn-kill');
+        const landBtn = el.querySelector('.btn-land-action');
+
         actionBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             if (deadDroneIds.has(drone.id)) {
@@ -488,6 +624,17 @@
             } else {
                 logEvent('CMD', `Terminating drone #${drone.id}`);
                 window.swarmClient?.send({ cmd: 'KILL_DRONE', id: drone.id });
+            }
+        });
+
+        landBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (landedDroneIds.has(drone.id)) {
+                logEvent('CMD', `Launching Drone #${drone.id} from pad: TAKEOFF_DRONE`);
+                window.swarmClient?.send({ cmd: 'TAKEOFF_DRONE', id: drone.id });
+            } else {
+                logEvent('CMD', `Commanding Drone #${drone.id} to soft-land: LAND_DRONE`);
+                window.swarmClient?.send({ cmd: 'LAND_DRONE', id: drone.id });
             }
         });
 
@@ -506,6 +653,7 @@
             elBatBar: el.querySelector('.card-battery-fill'),
             elStatus: el.querySelector('.status-tag'),
             elRole: el.querySelector('.drone-role-badge'),
+            elLandBtn: landBtn,
             elActionBtn: actionBtn,
         };
     }

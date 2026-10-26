@@ -107,7 +107,7 @@ class LeaderFollowerBrain(BaseBrain):
             self._update_formation_heading(current_leader, dt)
 
         for drone in self.sim.drones:
-            if drone.crashed:
+            if drone.crashed or drone.flight_state in ("LANDED", "DESCENDING"):
                 continue
 
             # 1. Leader guidance: steer toward global mission target
@@ -254,11 +254,12 @@ class LeaderFollowerBrain(BaseBrain):
 
     def _get_formation_slot(self, drone: Drone, leader: Drone) -> np.ndarray:
         living_followers = [
-            d for d in self.sim.drones if not d.crashed and not d.is_leader
+            d for d in self.sim.drones
+            if not d.crashed and not d.is_leader and d.flight_state not in ("LANDED", "DESCENDING")
         ]
         living_ids = {d.id for d in living_followers}
 
-        # Clean up dead or promoted drones from assigned slots
+        # Clean up dead, promoted, or landed drones from assigned slots
         for did in list(self.assigned_slots.keys()):
             if did not in living_ids:
                 del self.assigned_slots[did]
@@ -279,6 +280,12 @@ class LeaderFollowerBrain(BaseBrain):
                 while k in used:
                     k += 1
             self.assigned_slots[drone.id] = k
+
+        # Stage 1 Overhead Marshal: Equidistant holding ring around base anchor (0, 0, 25m)
+        if getattr(self.sim, "overhead_marshal_active", False):
+            radius = 20.0
+            angle = (2.0 * math.pi * (k - 1)) / max(1, len(living_followers))
+            return np.array([radius * math.cos(angle), radius * math.sin(angle), 25.0], dtype=float)
 
         if self.formation_mode == "ECHELON_ESCORT":
             heading = np.array(

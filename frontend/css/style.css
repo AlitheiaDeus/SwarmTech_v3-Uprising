@@ -366,9 +366,30 @@ html, body {
   background: rgba(0, 240, 255, 0.06);
 }
 
+.drone-telemetry-card.landed-card {
+  border-color: rgba(0, 255, 170, 0.5);
+  background: rgba(0, 255, 170, 0.05);
+}
+
+.drone-telemetry-card.landing-card {
+  border-color: rgba(255, 184, 0, 0.65);
+  background: rgba(255, 184, 0, 0.08);
+  animation: pulse-landing 1.2s infinite;
+}
+
+.drone-telemetry-card.hold-card {
+  border-color: rgba(0, 229, 255, 0.55);
+  background: rgba(0, 229, 255, 0.06);
+}
+
 @keyframes pulse-border {
   0%, 100% { border-color: rgba(255, 184, 0, 0.4); }
   50% { border-color: rgba(255, 184, 0, 1.0); }
+}
+
+@keyframes pulse-landing {
+  0%, 100% { border-color: rgba(255, 184, 0, 0.4); box-shadow: 0 0 6px rgba(255, 184, 0, 0.2); }
+  50% { border-color: rgba(255, 184, 0, 1.0); box-shadow: 0 0 14px rgba(255, 184, 0, 0.5); }
 }
 
 @keyframes pulse-takeoff {
@@ -481,6 +502,28 @@ html, body {
   animation: pulse-glow 0.8s infinite alternate;
 }
 
+.tag-landed {
+  color: var(--neon-emerald);
+  background: rgba(0, 255, 170, 0.15);
+  border: 1px solid rgba(0, 255, 170, 0.6);
+  font-weight: 700;
+}
+
+.tag-landing {
+  color: var(--neon-amber);
+  background: rgba(255, 184, 0, 0.2);
+  border: 1px solid var(--neon-amber);
+  font-weight: 700;
+  animation: pulse-border 1s infinite alternate;
+}
+
+.tag-hold {
+  color: #00E5FF;
+  background: rgba(0, 229, 255, 0.18);
+  border: 1px solid #00E5FF;
+  font-weight: 700;
+}
+
 .badge-2ic {
   color: var(--neon-cyan) !important;
   background: rgba(0, 240, 255, 0.2) !important;
@@ -549,6 +592,7 @@ html, body {
 .card-footer {
   display: flex;
   justify-content: flex-end;
+  gap: 6px;
 }
 
 .card-btn-action {
@@ -580,6 +624,33 @@ html, body {
 .btn-reboot:hover {
   background: rgba(0, 255, 170, 0.2);
   box-shadow: 0 0 6px var(--neon-emerald);
+}
+
+.btn-land {
+  border: 1px solid rgba(0, 240, 255, 0.4);
+  color: var(--neon-cyan);
+}
+
+.btn-land:hover {
+  background: rgba(0, 240, 255, 0.2);
+  box-shadow: 0 0 6px var(--neon-cyan);
+}
+
+.btn-launch {
+  border: 1px solid rgba(0, 255, 170, 0.5);
+  color: var(--neon-emerald);
+}
+
+.btn-launch:hover {
+  background: rgba(0, 255, 170, 0.2);
+  box-shadow: 0 0 6px var(--neon-emerald);
+}
+
+.btn-landing-busy {
+  border: 1px solid rgba(255, 184, 0, 0.5);
+  color: var(--neon-amber);
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 
 /* ==============================================================================
@@ -720,6 +791,80 @@ html, body {
 .checkbox-label input[type="checkbox"] {
   accent-color: var(--neon-cyan);
   cursor: pointer;
+}
+
+/* ==============================================================================
+   2-Stage Tactical Recovery & Soft-Landing (TKT-19)
+   ============================================================================== */
+.recovery-group {
+  background: rgba(0, 160, 200, 0.05);
+  padding: 10px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 240, 255, 0.22);
+}
+
+.recovery-title {
+  color: #00E5FF;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-rtb {
+  border-color: rgba(0, 229, 255, 0.5);
+  color: #00E5FF;
+  background: rgba(0, 229, 255, 0.08);
+  font-weight: 700;
+}
+
+.btn-rtb:hover {
+  background: rgba(0, 229, 255, 0.25);
+  border-color: #00E5FF;
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.5);
+}
+
+.btn-land-all {
+  border-color: rgba(0, 255, 170, 0.6);
+  color: var(--neon-emerald);
+  background: rgba(0, 255, 170, 0.1);
+  font-weight: 700;
+}
+
+.btn-land-all:hover {
+  background: rgba(0, 255, 170, 0.25);
+  border-color: var(--neon-emerald);
+  box-shadow: 0 0 12px rgba(0, 255, 170, 0.6);
+}
+
+.btn-cancel-recovery {
+  margin-top: 8px;
+  width: 100%;
+  border-color: rgba(255, 184, 0, 0.6);
+  color: var(--neon-amber);
+  background: rgba(255, 184, 0, 0.1);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+}
+
+.btn-cancel-recovery:hover {
+  background: rgba(255, 184, 0, 0.25);
+  border-color: var(--neon-amber);
+  color: #FFFFFF;
+  box-shadow: 0 0 12px rgba(255, 184, 0, 0.6);
+}
+
+.active-recovery {
+  background: rgba(0, 255, 170, 0.25) !important;
+  border-color: var(--neon-emerald) !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 0 14px rgba(0, 255, 170, 0.6) !important;
+  animation: pulse-recovery 1.5s infinite alternate;
+}
+
+@keyframes pulse-recovery {
+  0% { box-shadow: 0 0 6px rgba(0, 255, 170, 0.3); }
+  100% { box-shadow: 0 0 16px rgba(0, 255, 170, 0.8); }
 }
 
 .danger-group {
