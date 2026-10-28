@@ -1,41 +1,67 @@
 # SwarmTech3_UpRising: Project Kanban Board
 
+> **Tactical GCS Workflow & Task Lifecycle** | **Palette: Dark Navy (#061019) & Neon Cyan (#00F0FF)**  
+> *50/50 Architecture: Pure Python Kinematics & GPU-Native Three.js Rendering*
+
 ---
 
 ## 1. Visual Task Lifecycle Board
 
 ```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#0d2235',
+    'primaryTextColor': '#d4f4ff',
+    'primaryBorderColor': '#00f0ff',
+    'lineColor': '#00f0ff',
+    'background': '#061019',
+    'mainBkg': '#0a1926',
+    'secondaryColor': '#081420',
+    'secondaryTextColor': '#5a7e96',
+    'secondaryBorderColor': '#134e6f',
+    'tertiaryColor': '#0e263d',
+    'tertiaryTextColor': '#00ffaa',
+    'tertiaryBorderColor': '#00ffaa',
+    'clusterBkg': '#081420',
+    'clusterBorder': '#134e6f',
+    'fontFamily': "'JetBrains Mono', 'Courier New', monospace"
+  }
+}}%%
 kanban
   reported["Reported (Triage / Ideas: TLK & PLN)"]
-    tlk01["Architectural Reform: Decoupling Ground Truth, Autopilot, & GCS C2"]@{ ticket: 'TLK-01', priority: 'High' }
-    pln11["SITL Execution Target Provider (ArduPilot / PX4 MAVLink Cluster)"]@{ ticket: 'PLN-11', priority: 'Medium' }
-    pln12["Hardware Execution Target Provider (RFD900x / ELRS Radios)"]@{ ticket: 'PLN-12', priority: 'Low' }
-    pln13["Interactive 3D Route Planner & Geofence Corridor Canvas"]@{ ticket: 'PLN-13', priority: 'Low' }
-    pln14["Dual Viewport: SITL Truth Debugger vs Tactical GCS"]@{ ticket: 'PLN-14', priority: 'Low' }
+    tlk01["Architectural Reform: Decoupling Ground Truth, Autopilot, & GCS C2"]@{ ticket: '[TLK-01]', priority: 'High' }
+    pln11["SITL Execution Target Provider (ArduPilot / PX4 MAVLink Cluster)"]@{ ticket: '[PLN-11]', priority: 'Medium' }
+    pln12["Hardware Execution Target Provider (RFD900x / ELRS Radios)"]@{ ticket: '[PLN-12]', priority: 'Low' }
+    pln13["Interactive 3D Route Planner & Geofence Corridor Canvas"]@{ ticket: '[PLN-13]', priority: 'Low' }
+    pln14["Dual Viewport: SITL Truth Debugger vs Tactical GCS"]@{ ticket: '[PLN-14]', priority: 'Low' }
   todo["Todo (Planned & Scoped: TKT & FIX)"]
-    fix01["Target Drop-Line Ground Plane Penetration"]@{ ticket: 'FIX-01', priority: 'Low' }
-    fix02["GCS Failsafe Banner & Post-Severance Flight State Normalization"]@{ ticket: 'FIX-02', priority: 'Medium' }
-    tkt25["Ground Truth vs Autopilot Decoupling: Onboard Target & Uplink Mailbox"]@{ ticket: 'TKT-25', priority: 'High' }
-    tkt26["Dual Target C2 Visuals: Commanded Waypoint vs Swarm Acknowledged"]@{ ticket: 'TKT-26', priority: 'Medium' }
-    tkt27["Altitude-Gated Breakaway Dive & Umbilical Jettison State Machine"]@{ ticket: 'TKT-27', priority: 'High' }
-    tkt20["Airframe Inertia & Actuator Dynamics Presets"]@{ ticket: 'TKT-20', priority: 'High' }
-    tkt21["Dynamic Power Envelope: Battery Drain & Low-Power Failsafes"]@{ ticket: 'TKT-21', priority: 'Medium' }
-    tkt22["Manual RC Joystick & Gamepad Override (RadioMaster / EdgeTX)"]@{ ticket: 'TKT-22', priority: 'Medium' }
-    tkt23["Natural Boids Flocking Architecture: True Reynolds 3D Flocking"]@{ ticket: 'TKT-23', priority: 'Medium' }
-    tkt24["Dynamic Wind Gust Vector Field & Aerodynamic Disturbance"]@{ ticket: 'TKT-24', priority: 'Low' }
+    fix01["Target Drop-Line Ground Plane Penetration"]@{ ticket: '[FIX-01]', priority: 'Low' }
+    fix02["GCS Failsafe Banner & Post-Severance Flight State Normalization"]@{ ticket: '[FIX-02]', priority: 'Medium' }
+    tkt25["Ground Truth vs Autopilot Decoupling: Onboard Target & Uplink Mailbox"]@{ ticket: '[TKT-25]', priority: 'High' }
+    tkt26["Dual Target C2 Visuals: Commanded Waypoint vs Swarm Acknowledged"]@{ ticket: '[TKT-26]', priority: 'Medium' }
+    tkt27["Altitude-Gated Breakaway Dive & Umbilical Jettison State Machine"]@{ ticket: '[TKT-27]', priority: 'High' }
+    tkt20["Airframe Inertia & Actuator Dynamics Presets"]@{ ticket: '[TKT-20]', priority: 'High' }
+    tkt21["Dynamic Power Envelope: Battery Drain & Low-Power Failsafes"]@{ ticket: '[TKT-21]', priority: 'Medium' }
+    tkt22["Manual RC Joystick & Gamepad Override (RadioMaster / EdgeTX)"]@{ ticket: '[TKT-22]', priority: 'Medium' }
+    tkt23["Natural Boids Flocking Architecture: True Reynolds 3D Flocking"]@{ ticket: '[TKT-23]', priority: 'Medium' }
+    tkt24["Dynamic Wind Gust Vector Field & Aerodynamic Disturbance"]@{ ticket: '[TKT-24]', priority: 'Low' }
   in_progress["In Progress"]
   completed["Completed (Fresh / Review)"]
   archived["Archived (Settled in kanban_archive.md)"]
-    arch_m1_6["Core 50/50 Architecture Settled (TKT-01 to TKT-06)"]@{ ticket: 'M1-M6' }
-    arch_m7_10_13["Formations, Badges, & Spawner (TKT-07 to TKT-10, TKT-13)"]@{ ticket: 'M7-M10,13' }
-    arch_m11_19["Tether Failsafes, Mesh Formations, RTB & Tri-Mode RF (TKT-11 to TKT-19)"]@{ ticket: 'TKT-11-19' }
+    arch_m1_6["Core 50/50 Architecture Settled (TKT-01 to TKT-06)"]@{ ticket: '[M1-M6]' }
+    arch_m7_10_13["Formations, Badges, & Spawner (TKT-07 to TKT-10, TKT-13)"]@{ ticket: '[M7-M10,13]' }
+    arch_m11_19["Tether Failsafes, Mesh Formations, RTB & Tri-Mode RF (TKT-11 to TKT-19)"]@{ ticket: '[TKT-11-19]' }
 ```
 
 ---
 
 ## 2. Bug Log & Engineering Specs Table
 
-> *Note: Archived milestones (`[TKT-01]` through `[TKT-19]`) and settled architecture decisions (`[PLN-01]` through `[PLN-04]`) are preserved in [kanban_archive.md](kanban_archive.md).*
+> *Note: Detailed scoping and acceptance criteria are maintained across the 3-document architecture:*
+> * **[kanban.md](kanban.md)**: Active working board & current specs table.
+> * **[kanban_scope.md](kanban_scope.md)**: Deep technical architecture & planned implementation notes.
+> * **[kanban_archive.md](kanban_archive.md)**: Settled milestones (`[TKT-01]` to `[TKT-19]`) and historical decisions (`[PLN-01]` to `[PLN-04]`).
 
 | Ticket ID | Feature / Component | Priority | Status | Acceptance Criteria | Test Command | Root Cause & Engineering Solution |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -60,15 +86,16 @@ kanban
 
 ## 3. Strict Kanban Governance Rules
 1. **WIP = 1**: At most one active ticket in `In Progress` at any time.
-2. **Verification Gate**: No ticket moves to `Completed` without passing automated unit tests or smoke tests.
+2. **Verification Gate (Code Deliverables Only)**: Code tickets require passing their targeted test module before moving to `Completed`. Non-code changes (documentation, board theme/layout, comments) require zero tests.
 3. **User Sign-Off**: Cards in `Completed` remain for user testing and review until explicitly approved for archival.
-4. **Git Hygiene**: Do not create standalone commits purely for kanban updates or task archival. Bundle board transitions into verified feature commits.
+4. **Git Hygiene**: Governed by `git-workflow-guard`. Never commit standalone housekeeping churn; bundle verified code, targeted tests, and board transitions into single atomic feature commits.
 
 ### Project Ticket Prefix Standard
-* **`TKT-xx`** *(Feature / Implementation)*: Scoped, planned, and ready to implement or modify single features.
-* **`FIX-xx`** *(Bug Fix / Remediation)*: Defect remediation and bug fixes only.
-* **`PLN-xx`** *(Envisioned Roadmap Item)*: Something envisioned to consider for the future but not currently committed to active development.
-* **`TLK-xx`** *(Discussion / Architectural Reform)*: Something that has to be discussed and laid out in detail, ironing out all niches before decomposing into multiple `TKT`s.
+* **`TKT-xx`** / **`FIX-xx`** / **`BUG-xx`** *(For Doing)*: Actionable, scoped work ready for active coding.
+* **`PLN-xx`** *(Future Candidate / Roadmap)*: A new feature or change under consideration, but **not yet committed** to implementation.
+* **`TLK-xx`** *(Architectural Reform / Discussion)*: Major architectural shifts requiring deep planning and discussion. Activations typically spawn multiple `TKT` or `PLN` tickets.
+
+> **Execution Order Note**: Ticket IDs (numbers) are persistent identifiers and do **NOT** dictate chronological order of completion. Execution follows architectural priorities and developer direction.
 
 ---
 
