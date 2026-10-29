@@ -147,8 +147,13 @@ class SwarmWebServer:
             pos = cmd_dict.get("pos", [60.0, 40.0, 30.0])
             self.sim.patrol_active = False
             res = self.sim.set_target(pos)
-            if isinstance(res, dict) and res.get("status") == "OUT_OF_RANGE":
-                return {"status": "OUT_OF_RANGE", "cmd": cmd, "error": res.get("error")}
+            if isinstance(res, dict) and res.get("status") in ("OUT_OF_RANGE", "DROPPED"):
+                return {
+                    "status": res.get("status"),
+                    "cmd": cmd,
+                    "error": res.get("error"),
+                    "reason": res.get("reason"),
+                }
             return {"status": "OK", "cmd": "SET_TARGET", "target": pos, "patrol_active": False}
 
         elif cmd in ("TOGGLE_PATROL", "TOGGLE_TARGET_PATROL", "SET_PATROL"):
@@ -324,8 +329,9 @@ class SwarmWebServer:
         next_tick = time.perf_counter()
 
         while self.is_running:
-            # Advance simulation world
-            self.sim.step(interval)
+            # Advance GCS C2 layer and physics simulation world
+            self.sim.step_c2(interval)
+            self.sim.step(interval, advance_c2=False)
 
             # Step UDP / MAVLink bridge if attached
             if self.bridge is not None:

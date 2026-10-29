@@ -134,6 +134,11 @@ class Drone:
         self.landing_wait_timer: float = 0.0
         self.landing_stage: str = "NONE"  # "NONE", "WAITING_CLEARANCE", "APPROACH", "FINAL_DESCENT", "LANDED"
 
+        # Onboard Target Buffer (TKT-25: Ground Truth vs Autopilot Decoupling)
+        self.acknowledged_target: np.ndarray = (
+            np.array(pos, dtype=float) if pos is not None else np.array([60.0, 40.0, 30.0], dtype=float)
+        )
+
     def reset_state(
         self,
         pos: np.ndarray,
@@ -169,6 +174,7 @@ class Drone:
         self.landing_pad = None
         self.landing_wait_timer = 0.0
         self.landing_stage = "NONE"
+        self.acknowledged_target = np.array(pos, dtype=float)
 
     def succession_score(self) -> int:
         """Calculate autonomic succession eligibility score: (Tier * 1000) - ID."""
@@ -200,6 +206,7 @@ class Drone:
             "tether_failsafe_policy": self.tether_failsafe_policy,
             "landing_pad_idx": self.landing_pad_idx,
             "landing_stage": self.landing_stage,
+            "acknowledged_target": [round(float(v), 2) for v in self.acknowledged_target],
         }
 
 
@@ -228,7 +235,7 @@ class SwarmSimulator:
 
         # Global Mission State
         self.formation_mode: str = "ECHELON_ESCORT"  # ECHELON_ESCORT, NATURAL_FLOCK, ORBIT_VORTEX, PERIMETER_PATROL
-        self.target_pos: np.ndarray = np.array([60.0, 40.0, 30.0], dtype=float)
+        self._target_pos: np.ndarray = np.array([60.0, 40.0, 30.0], dtype=float)
         self.tether_anchor: np.ndarray = np.copy(TETHER_ANCHOR)
         self.tether_severed: bool = False
 
@@ -372,6 +379,44 @@ class SwarmSimulator:
             )
             self.drones.append(drone)
 
+        for d in self.drones:
+            d.acknowledged_target = np.copy(self._target_pos)
+
+    @property
+    def target_pos(self) -> np.ndarray:
+        """Commanded target waypoint at GCS C2 layer."""
+        return self._target_pos
+
+    @target_pos.setter
+    def target_pos(self, value: Union[List[float], np.ndarray]) -> None:
+        self._target_pos = np.array(value, dtype=float)
+        # Attempt to synchronize to onboard drone buffers if link is intact
+        if not self.tether_severed and self.comms_mode == "TETHERED_RELAY":
+            for d in self.drones:
+                if d.is_leader or d.id == 0:
+                    d.acknowledged_target = np.copy(self._target_pos)
+        elif self.comms_mode == "LEADER_FOLLOWER":
+            current_leader = self.leader
+            if current_leader is not None and not current_leader.crashed:
+                d_gcs = float(np.linalg.norm(current_leader.pos - self.tether_anchor))
+                if d_gcs <= RADIO_RANGE:
+                    current_leader.acknowledged_target = np.copy(self._target_pos)
+
+    def get_acknowledged_target(self) -> np.ndarray:
+        """Return the current onboard target acknowledged by the active swarm guidance."""
+        if self.comms_mode in ("TETHERED_RELAY", "LEADER_FOLLOWER"):
+            current_leader = self.leader
+            if current_leader is not None:
+                return np.copy(current_leader.acknowledged_target)
+            return np.copy(self._target_pos)
+        elif self.comms_mode == "GOSSIP_CONSENSUS":
+            if hasattr(self.brain, "peer_states") and self.brain.peer_states:
+                for d in self.drones:
+                    if not d.crashed and d.id in self.brain.peer_states:
+                        return np.copy(self.brain.peer_states[d.id].active_target)
+            return np.copy(self._target_pos)
+        return np.copy(self._target_pos)
+
     @property
     def leader(self) -> Optional[Drone]:
         """Get the active fleet leader."""
@@ -396,35 +441,43 @@ class SwarmSimulator:
         return candidates[0]
 
     # ==========================================================================
-    # Step Integration Loop (60 FPS)
+    # Step Integration Loop (60 FPS) & GCS C2 Dispatcher (TKT-25)
     # ==========================================================================
-    def step(self, dt: float = DT) -> None:
-        """Advance the simulation world by dt seconds."""
+    def step_c2(self, dt: float) -> None:
+        """Advance GCS C2 layer: auto-patrol trajectory generation and periodic uplink transmission."""
+        if not self.patrol_active:
+            return
+
+        self.patrol_time += dt * self.patrol_speed
+        t = self.patrol_time
+        patrol_x = float(self.patrol_center[0] + self.patrol_scale[0] * math.cos(t))
+        patrol_y = float(self.patrol_center[1] + self.patrol_scale[1] * math.sin(2.0 * t) * 0.75)
+        patrol_z = float(max(15.0, self.patrol_center[2] + self.patrol_scale[2] * math.sin(t * 1.5)))
+
+        # Update Commanded Target at GCS
+        self._target_pos = np.array([patrol_x, patrol_y, patrol_z], dtype=float)
+
+        should_update_uplink = True
+        if self.active_brain_name == "GOSSIP_CONSENSUS":
+            time_since_last = self.sim_time - self.last_gossip_inject_time
+            gossip_extra = self.brain.get_telemetry_extra()
+            consensus_reached = gossip_extra.get("consensus_reached", True)
+            if not consensus_reached and time_since_last < 2.5:
+                should_update_uplink = False
+            elif time_since_last < 1.2:
+                should_update_uplink = False
+
+        if should_update_uplink:
+            res = self.dispatch_target_uplink(self._target_pos)
+            if self.active_brain_name == "GOSSIP_CONSENSUS" and res.get("status") == "OK":
+                self.last_gossip_inject_time = self.sim_time
+
+    def step(self, dt: float = DT, advance_c2: bool = True) -> None:
+        """Advance the physical simulation world by dt seconds."""
+        if advance_c2:
+            self.step_c2(dt)
+
         self.sim_time += dt
-
-        # 0. Advance 3D Target Auto-Patrol Loop if active
-        if self.patrol_active:
-            self.patrol_time += dt * self.patrol_speed
-            t = self.patrol_time
-            patrol_x = float(self.patrol_center[0] + self.patrol_scale[0] * math.cos(t))
-            patrol_y = float(self.patrol_center[1] + self.patrol_scale[1] * math.sin(2.0 * t) * 0.75)
-            patrol_z = float(max(15.0, self.patrol_center[2] + self.patrol_scale[2] * math.sin(t * 1.5)))
-
-            should_update_target = True
-            if self.active_brain_name == "GOSSIP_CONSENSUS":
-                time_since_last = self.sim_time - self.last_gossip_inject_time
-                gossip_extra = self.brain.get_telemetry_extra()
-                consensus_reached = gossip_extra.get("consensus_reached", True)
-                # Allow gossip mesh to reach consensus and hold before issuing next patrol waypoint
-                if not consensus_reached and time_since_last < 2.5:
-                    should_update_target = False
-                elif time_since_last < 1.2:
-                    should_update_target = False
-
-            if should_update_target:
-                self.set_target([patrol_x, patrol_y, patrol_z])
-                if self.active_brain_name == "GOSSIP_CONSENSUS":
-                    self.last_gossip_inject_time = self.sim_time
 
         # 0b. Advance Doctrine A Lost-Link Loiter & Automated RTB Timer (TKT-16 / TKT-19)
         if self.tether_severed and not self.swarm_rtb_active:
@@ -1111,6 +1164,8 @@ class SwarmSimulator:
         new_leader.status = "PROMOTED_LEADER"
         new_leader.lost_link = False
         new_leader.promotion_timer = 1.5
+        if old_leader is not None:
+            new_leader.acknowledged_target = np.copy(old_leader.acknowledged_target)
 
         # Notify active brain hook of succession
         if hasattr(self, "brain") and hasattr(self.brain, "on_succession"):
@@ -1367,37 +1422,83 @@ class SwarmSimulator:
             if hasattr(self.brain, "formation_mode"):
                 self.brain.formation_mode = mode
 
-    def set_target(self, pos: List[float]) -> Dict[str, Any]:
-        """Set global 3D mission target waypoint."""
-        target_arr = np.array(pos, dtype=float)
+    def dispatch_target_uplink(self, target_pos: Union[List[float], np.ndarray]) -> Dict[str, Any]:
+        """Attempt to deliver a commanded target waypoint across the simulated C2 link (tether or RF).
+        If the physical channel is broken (severed tether or out of 120m RF range),
+        the uplink packet is dropped and drone onboard buffers remain untouched."""
+        target_arr = np.array(target_pos, dtype=float)
 
-        # In LEADER_FOLLOWER, check if leader is within GCS radio range (120m)
-        if self.comms_mode == "LEADER_FOLLOWER":
+        # 1. TETHERED_RELAY: Hardline umbilical to Drone 0
+        if self.comms_mode == "TETHERED_RELAY":
+            if self.tether_severed:
+                return {
+                    "status": "DROPPED",
+                    "reason": "TETHER_SEVERED",
+                    "error": "Tactical umbilical is severed. Uplink packet dropped.",
+                }
+            # Hardline delivery to tethered leader
+            for d in self.drones:
+                if d.id == 0 or d.is_leader:
+                    d.acknowledged_target = np.copy(target_arr)
+            return {
+                "status": "OK",
+                "channel": "HARDLINE_UMBILICAL",
+                "target": [round(float(v), 2) for v in target_arr],
+            }
+
+        # 2. LEADER_FOLLOWER: Wireless Star to active fleet leader
+        elif self.comms_mode == "LEADER_FOLLOWER":
             current_leader = self.leader
-            if current_leader is not None:
-                d_gcs = float(np.linalg.norm(current_leader.pos - self.tether_anchor))
-                if d_gcs > RADIO_RANGE:
-                    return {
-                        "status": "OUT_OF_RANGE",
-                        "error": f"Leader Drone #{current_leader.id} ({d_gcs:.1f}m) out of GCS radio range ({RADIO_RANGE}m)",
-                    }
+            if current_leader is None or current_leader.crashed:
+                return {
+                    "status": "DROPPED",
+                    "reason": "NO_LEADER",
+                    "error": "No living fleet leader to receive wireless uplink.",
+                }
+            d_gcs = float(np.linalg.norm(current_leader.pos - self.tether_anchor))
+            if d_gcs > RADIO_RANGE:
+                return {
+                    "status": "OUT_OF_RANGE",
+                    "reason": "RADIO_RANGE_EXCEEDED",
+                    "error": f"Leader Drone #{current_leader.id} ({d_gcs:.1f}m) out of GCS radio range ({RADIO_RANGE}m)",
+                }
+            current_leader.acknowledged_target = np.copy(target_arr)
+            return {
+                "status": "OK",
+                "channel": "WIRELESS_STAR",
+                "target": [round(float(v), 2) for v in target_arr],
+            }
 
-        brain_res = None
-        if hasattr(self.brain, "inject_target"):
-            brain_res = self.brain.inject_target(pos)
-            if isinstance(brain_res, dict) and brain_res.get("status") == "OUT_OF_RANGE":
-                return brain_res
+        # 3. GOSSIP_CONSENSUS: Wireless P2P Mesh Ingestion
+        elif self.comms_mode == "GOSSIP_CONSENSUS":
+            if hasattr(self.brain, "inject_target"):
+                res = self.brain.inject_target(target_arr)
+                if isinstance(res, dict) and res.get("status") == "OUT_OF_RANGE":
+                    return res
+                return res if isinstance(res, dict) else {
+                    "status": "OK",
+                    "channel": "P2P_MESH",
+                    "target": [round(float(v), 2) for v in target_arr],
+                }
+            return {"status": "OK", "channel": "P2P_MESH"}
 
-        self.target_pos = target_arr
+        return {"status": "ERROR", "error": f"Unknown comms mode: {self.comms_mode}"}
+
+    def set_target(self, pos: Union[List[float], np.ndarray]) -> Dict[str, Any]:
+        """Command a new 3D mission target waypoint from GCS and attempt uplink dispatch."""
+        target_arr = np.array(pos, dtype=float)
+        self._target_pos = target_arr
+
+        # Dispatch across simulated uplink channel
+        uplink_res = self.dispatch_target_uplink(self._target_pos)
+
         # If user explicitly dispatches a new target away from base anchor, disengage RTB marshal
-        if not np.allclose(self.target_pos, [0.0, 0.0, 25.0], atol=1.0):
+        if not np.allclose(self._target_pos, [0.0, 0.0, 25.0], atol=1.0):
             if self.overhead_marshal_active or self.swarm_rtb_active:
-                self.cancel_rtb()
+                if uplink_res.get("status") == "OK":
+                    self.cancel_rtb()
 
-        if isinstance(brain_res, dict):
-            return brain_res
-
-        return {"status": "OK", "target": [round(float(v), 2) for v in self.target_pos]}
+        return uplink_res
 
     def toggle_target_patrol(self, active: Optional[bool] = None) -> bool:
         """Toggle or explicitly set continuous 3D target auto-patrol loop."""
@@ -1428,6 +1529,7 @@ class SwarmSimulator:
             d_dict["is_2ic"] = (d.id == two_ic_id and not d.is_leader and not d.crashed)
             drones_list.append(d_dict)
 
+        ack_target = self.get_acknowledged_target()
         return {
             "sim_time": round(float(self.sim_time), 3),
             "dt": DT,
@@ -1437,6 +1539,8 @@ class SwarmSimulator:
             "gcs_radio_range": RADIO_RANGE,
             "formation": getattr(self.brain, "formation_mode", self.formation_mode),
             "target": [round(float(v), 2) for v in self.target_pos],
+            "commanded_target": [round(float(v), 2) for v in self.target_pos],
+            "acknowledged_target": [round(float(v), 2) for v in ack_target],
             "patrol_active": self.patrol_active,
             "two_ic_id": two_ic_id,
             "lost_link_loiter_timer": round(max(0.0, float(self.lost_link_loiter_timer)), 1),

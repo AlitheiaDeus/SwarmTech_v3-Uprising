@@ -149,8 +149,9 @@ class LeaderFollowerBrain(BaseBrain):
                 else:
                     leader_speed = V_CRUISE
 
+                target_dest = getattr(drone, "acknowledged_target", self.sim.target_pos)
                 accs[drone.id] = self._steer_toward(
-                    drone.pos, drone.vel, self.sim.target_pos, max_speed=leader_speed
+                    drone.pos, drone.vel, target_dest, max_speed=leader_speed
                 )
                 continue
 
@@ -241,7 +242,8 @@ class LeaderFollowerBrain(BaseBrain):
         """Update and smooth echelon formation heading with anti-jitter freeze
         and bounded slew rate filter (<= 45 deg/s)."""
         speed_xy = math.hypot(leader.vel[0], leader.vel[1])
-        to_target = self.sim.target_pos - leader.pos
+        leader_target = getattr(leader, "acknowledged_target", self.sim.target_pos)
+        to_target = leader_target - leader.pos
         dist_to_target = float(np.linalg.norm(to_target))
 
         # Initial bootstrap if heading has not been established yet
@@ -345,8 +347,13 @@ class LeaderFollowerBrain(BaseBrain):
             # Static defensive sentry ring holding equidistant guard stations around target
             radius = 25.0
             angle = (2.0 * math.pi * (k - 1)) / max(1, len(living_followers))
+            center = (
+                leader.acknowledged_target
+                if hasattr(leader, "acknowledged_target")
+                else self.sim.target_pos
+            )
             return (
-                self.sim.target_pos
+                center
                 + np.array([radius * math.cos(angle), radius * math.sin(angle), 0.0])
             )
 

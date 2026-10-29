@@ -461,6 +461,88 @@ class TestSimCore(unittest.TestCase):
             self.sim.step()
         np.testing.assert_allclose(self.sim.target_pos, frozen_target)
 
+    def test_uplink_mailbox_tether_severance_drops_packets(self):
+        """Severed tether drops GCS target uplinks; drone acknowledged target is not modified (TKT-25)."""
+        sim = SwarmSimulator(drone_count=6)
+        initial_ack = np.copy(sim.leader.acknowledged_target)
+
+        # Sever tether
+        sim.cut_tether()
+        self.assertTrue(sim.tether_severed)
+
+        # Attempt to command new target waypoint from GCS
+        res = sim.set_target([100.0, 100.0, 30.0])
+        self.assertEqual(res.get("status"), "DROPPED")
+        self.assertEqual(res.get("reason"), "TETHER_SEVERED")
+
+        # Commanded target at GCS was updated
+        np.testing.assert_allclose(sim.target_pos, [100.0, 100.0, 30.0])
+
+        # But living successor leader's onboard target buffer remained untouched
+        np.testing.assert_allclose(sim.leader.acknowledged_target, initial_ack)
+
+    def test_auto_patrol_severance_prevents_2ic_dead_wire_chase(self):
+        """Severing tether during auto-patrol prevents 2IC from chasing moving patrol target (TKT-25)."""
+        sim = SwarmSimulator(drone_count=6)
+        sim.toggle_target_patrol(True)
+        self.assertTrue(sim.patrol_active)
+
+        # Step 30 ticks to begin patrol transit
+        for _ in range(30):
+            sim.step()
+
+        # Sever tether
+        sim.cut_tether()
+        self.assertTrue(sim.tether_severed)
+
+        # Dynamic 2IC is now leader
+        successor = sim.leader
+        self.assertIsNotNone(successor)
+        promoted_loiter_target = np.copy(successor.acknowledged_target)
+
+        # Step 120 ticks (2.0s) with auto-patrol running in GCS
+        for _ in range(120):
+            sim.step()
+
+        # Commanded target at GCS continues moving along figure-8
+        dist_gcs_moved = float(np.linalg.norm(sim.target_pos - promoted_loiter_target))
+        self.assertGreater(dist_gcs_moved, 1.0, "GCS commanded target should advance along patrol route")
+
+        # But 2IC's onboard target buffer MUST remain frozen at the cut loiter target!
+        np.testing.assert_allclose(
+            successor.acknowledged_target,
+            promoted_loiter_target,
+            err_msg="2IC must not chase moving GCS patrol target across severed tether!",
+        )
+
+        # All living drones must maintain safe separation (0 prop clashes)
+        living = [d for d in sim.drones if not d.crashed]
+        for i in range(len(living)):
+            for j in range(i + 1, len(living)):
+                d = float(np.linalg.norm(living[i].pos - living[j].pos))
+                self.assertGreater(d, 1.5, "No prop clashes permitted during post-severance loiter!")
+
+    def test_uplink_mailbox_radio_range_gating(self):
+        """In LEADER_FOLLOWER, target uplink packets are dropped if leader exceeds 120m radio range (TKT-25)."""
+        sim = SwarmSimulator(drone_count=6)
+        sim.set_comms_mode("LEADER_FOLLOWER")
+
+        # Move leader beyond 120m GCS radio range
+        sim.leader.pos = np.array([130.0, 0.0, 25.0], dtype=float)
+        initial_ack = np.copy(sim.leader.acknowledged_target)
+
+        # Attempt uplink dispatch
+        res = sim.set_target([80.0, 80.0, 30.0])
+        self.assertEqual(res.get("status"), "OUT_OF_RANGE")
+        # Onboard target buffer remains untouched
+        np.testing.assert_allclose(sim.leader.acknowledged_target, initial_ack)
+
+        # Move leader back within 120m range
+        sim.leader.pos = np.array([60.0, 0.0, 25.0], dtype=float)
+        res = sim.set_target([80.0, 80.0, 30.0])
+        self.assertEqual(res.get("status"), "OK")
+        np.testing.assert_allclose(sim.leader.acknowledged_target, [80.0, 80.0, 30.0])
+
 
 if __name__ == "__main__":
     unittest.main()

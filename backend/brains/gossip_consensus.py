@@ -181,11 +181,12 @@ class GossipConsensusBrain(BaseBrain):
         sorted_ids = sorted([d.id for d in active_drones])
 
         # Update virtual swarm heading toward consensus target
-        consensus_target = self.sim.target_pos
+        consensus_target = self.sim.get_acknowledged_target()
         self._update_formation_heading(active_drones, consensus_target, dt)
 
         for drone in active_drones:
             state = self._get_peer_state(drone.id)
+            drone.acknowledged_target = np.copy(state.active_target)
             k = sorted_ids.index(drone.id)
             slot_pos = self._get_formation_slot(drone, k, living_count, state.active_target)
 
