@@ -128,6 +128,14 @@
         </div>
         <button id="btn-toggle-patrol" class="tactical-btn btn-patrol">&#x221E; AUTO PATROL LOOP</button>
         
+        <div id="hud-target-status" class="target-status-line status-synced">
+          <span class="tgt-label cmd-label"><span class="tgt-dot dot-cmd"></span>CMD</span>
+          <span id="val-cmd-tgt" class="tgt-coord">[60, 40, 30]</span>
+          <span class="tgt-sep">|</span>
+          <span class="tgt-label ack-label"><span class="tgt-dot dot-ack"></span>ACK</span>
+          <span id="val-ack-tgt" class="tgt-coord">[60, 40, 30]</span>
+        </div>
+
         <div class="coord-input-row">
           <input type="number" id="tgt-input-x" class="tactical-input" placeholder="X" value="60" step="5">
           <input type="number" id="tgt-input-y" class="tactical-input" placeholder="Y" value="40" step="5">

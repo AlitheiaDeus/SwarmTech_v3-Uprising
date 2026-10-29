@@ -23,6 +23,7 @@
         crashed: 0xFF3366,
         propagating: 0xFFB800,
         tether: 0x00F0FF,
+        commandedTarget: 0x00F0FF,
         target: 0x00FFAA,
         dropLine: 0x00F0FF,
     };
@@ -32,6 +33,7 @@
     let dronesMap = new Map();
     let tetherMesh = null;
     let targetBeacon = null;
+    let commandedBeacon = null;
     let gcsMast = null;
 
     let isChaseCam = false;
@@ -96,6 +98,7 @@
         createTacticalRangeRings();
         createGcsMast();
         createTargetBeacon();
+        createCommandedBeacon();
         createCatenaryTether();
         createRecoveryPads();
 
@@ -197,17 +200,24 @@
     function createTargetBeacon() {
         targetBeacon = new THREE.Group();
 
-        // 1. Rotating diamond
+        // 1. Solid rotating emerald diamond with subtle edge glow (TKT-26)
         const octGeom = new THREE.OctahedronGeometry(1.2, 0);
         const octMat = new THREE.MeshStandardMaterial({
             color: COLORS.target,
             emissive: COLORS.target,
-            emissiveIntensity: 0.8,
-            wireframe: true,
+            emissiveIntensity: 0.6,
+            roughness: 0.25,
+            metalness: 0.75,
+            wireframe: false,
         });
         const diamond = new THREE.Mesh(octGeom, octMat);
         diamond.position.set(0, 0, 0);
         diamond.name = 'diamond';
+
+        const wireGeom = new THREE.WireframeGeometry(octGeom);
+        const wireMat = new THREE.LineBasicMaterial({ color: 0xFFFFFF, transparent: true, opacity: 0.4 });
+        const wire = new THREE.LineSegments(wireGeom, wireMat);
+        diamond.add(wire);
         targetBeacon.add(diamond);
 
         // 2. Vertical laser beam to ground (FIX-01: unit length, dynamically scaled to ground Z=0)
@@ -238,6 +248,54 @@
 
         targetBeacon.position.set(60, 40, 30);
         scene.add(targetBeacon);
+    }
+
+    function createCommandedBeacon() {
+        commandedBeacon = new THREE.Group();
+
+        // 1. Hollow rotating octahedron wireframe (Cyan 0x00F0FF) (TKT-26)
+        const octGeom = new THREE.OctahedronGeometry(1.65, 0);
+        const octMat = new THREE.MeshBasicMaterial({
+            color: COLORS.commandedTarget,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.85,
+        });
+        const diamond = new THREE.Mesh(octGeom, octMat);
+        diamond.name = 'diamond';
+        commandedBeacon.add(diamond);
+
+        // 2. Tactical targeting reticle ring around the diamond
+        const reticleGeom = new THREE.RingGeometry(1.8, 2.05, 24);
+        const reticleMat = new THREE.MeshBasicMaterial({
+            color: COLORS.commandedTarget,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.7,
+        });
+        const reticle = new THREE.Mesh(reticleGeom, reticleMat);
+        reticle.name = 'reticle';
+        commandedBeacon.add(reticle);
+
+        // 3. Thin dashed drop-line to ground (visible when diverged from acknowledged target)
+        const dropGeom = new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(0, 0, 0),
+            new THREE.Vector3(0, 0, 0),
+        ]);
+        const dropMat = new THREE.LineDashedMaterial({
+            color: COLORS.commandedTarget,
+            dashSize: 1.0,
+            gapSize: 0.8,
+            transparent: true,
+            opacity: 0.5,
+        });
+        const dropLine = new THREE.Line(dropGeom, dropMat);
+        dropLine.name = 'dropLine';
+        dropLine.visible = false;
+        commandedBeacon.add(dropLine);
+
+        commandedBeacon.position.set(60, 40, 30);
+        scene.add(commandedBeacon);
     }
 
     function createCatenaryTether() {
@@ -711,9 +769,15 @@
         // Update Top Bar HUD Info
         updateTopBar(frame);
 
-        // Update Target Waypoint position
-        if (frame.target && targetBeacon) {
-            targetBeacon.position.set(frame.target[0], frame.target[1], frame.target[2]);
+        // Update Target Waypoint positions (TKT-26: Dual Target C2 Visuals)
+        const cmdTarget = frame.commanded_target || frame.target;
+        const ackTarget = frame.acknowledged_target || frame.target;
+
+        if (cmdTarget && commandedBeacon) {
+            commandedBeacon.position.set(cmdTarget[0], cmdTarget[1], cmdTarget[2]);
+        }
+        if (ackTarget && targetBeacon) {
+            targetBeacon.position.set(ackTarget[0], ackTarget[1], ackTarget[2]);
         }
 
         // Update / Spawn Drones
@@ -1057,10 +1121,16 @@
             }
         }
 
-        // 2. Animate Target Waypoint Beacon (FIX-01: dynamic ground clamp)
+        // 2. Animate Dual Target Waypoint Beacons (TKT-26)
+        let targetsDiverged = false;
+        if (targetBeacon && commandedBeacon) {
+            const dist = targetBeacon.position.distanceTo(commandedBeacon.position);
+            targetsDiverged = dist > 0.8;
+        }
+
         if (targetBeacon) {
             const diamond = targetBeacon.getObjectByName('diamond');
-            if (diamond) diamond.rotation.z += 0.02;
+            if (diamond) diamond.rotation.z += 0.015;
 
             const targetZ = Math.max(0.01, targetBeacon.position.z);
             const beam = targetBeacon.getObjectByName('beam');
@@ -1074,6 +1144,32 @@
                 const scale = 1.0 + 0.15 * Math.sin(performance.now() * 0.005);
                 ring.scale.set(scale, scale, 1);
                 ring.position.z = -targetBeacon.position.z + 0.05;
+            }
+        }
+
+        if (commandedBeacon) {
+            const cmdDiamond = commandedBeacon.getObjectByName('diamond');
+            if (cmdDiamond) cmdDiamond.rotation.z -= 0.02;
+
+            const reticle = commandedBeacon.getObjectByName('reticle');
+            if (reticle) {
+                reticle.rotation.z += 0.01;
+                const rScale = 1.0 + 0.08 * Math.sin(performance.now() * 0.008);
+                reticle.scale.set(rScale, rScale, 1);
+            }
+
+            const dropLine = commandedBeacon.getObjectByName('dropLine');
+            if (dropLine) {
+                if (targetsDiverged && commandedBeacon.position.z > 0.6) {
+                    dropLine.visible = true;
+                    dropLine.geometry.setFromPoints([
+                        new THREE.Vector3(0, 0, 0),
+                        new THREE.Vector3(0, 0, -commandedBeacon.position.z)
+                    ]);
+                    dropLine.computeLineDistances();
+                } else {
+                    dropLine.visible = false;
+                }
             }
         }
 

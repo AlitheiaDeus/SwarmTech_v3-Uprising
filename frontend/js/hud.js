@@ -286,11 +286,35 @@
             }
         }
 
-        // 4. Update Target coordinate inputs if empty
-        if (frame.target && inputX && !inputX.matches(':focus')) {
-            inputX.value = frame.target[0];
-            inputY.value = frame.target[1];
-            inputZ.value = frame.target[2];
+        // 4. Update Target coordinate inputs & Dual Target C2 Status (TKT-26)
+        const cmdTarget = frame.commanded_target || frame.target;
+        const ackTarget = frame.acknowledged_target || frame.target;
+
+        if (cmdTarget && inputX && !inputX.matches(':focus')) {
+            inputX.value = cmdTarget[0];
+            inputY.value = cmdTarget[1];
+            inputZ.value = cmdTarget[2];
+        }
+
+        const valCmdTgt = document.getElementById('val-cmd-tgt');
+        const valAckTgt = document.getElementById('val-ack-tgt');
+        const tgtStatusLine = document.getElementById('hud-target-status');
+        if (valCmdTgt && cmdTarget) {
+            valCmdTgt.textContent = `[${cmdTarget[0]}, ${cmdTarget[1]}, ${cmdTarget[2]}]`;
+        }
+        if (valAckTgt && ackTarget) {
+            valAckTgt.textContent = `[${ackTarget[0]}, ${ackTarget[1]}, ${ackTarget[2]}]`;
+        }
+        if (tgtStatusLine && cmdTarget && ackTarget) {
+            const dx = cmdTarget[0] - ackTarget[0];
+            const dy = cmdTarget[1] - ackTarget[1];
+            const dz = cmdTarget[2] - ackTarget[2];
+            const diverged = Math.hypot(dx, dy, dz) > 0.8;
+            if (diverged) {
+                tgtStatusLine.className = 'target-status-line status-diverged';
+            } else {
+                tgtStatusLine.className = 'target-status-line status-synced';
+            }
         }
 
         // 4b. Monitor Auto-Patrol Loop State
