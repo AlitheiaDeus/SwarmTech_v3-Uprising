@@ -14,6 +14,7 @@ class SwarmWSClient {
             telemetry: [],
             status: [],
             command_ack: [],
+            hydration: [],
         };
 
         this.init();
@@ -41,7 +42,9 @@ class SwarmWSClient {
             this.socket.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    if (data.type === 'TELEMETRY_FRAME' || data.sim_time !== undefined) {
+                    if (data.type === 'SESSION_HYDRATION') {
+                        this._emit('hydration', data);
+                    } else if (data.type === 'TELEMETRY_FRAME' || data.sim_time !== undefined) {
                         this._emit('telemetry', data);
                     } else if (data.type === 'COMMAND_ACK') {
                         this._emit('command_ack', data);

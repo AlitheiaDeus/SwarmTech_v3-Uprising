@@ -45,6 +45,7 @@
             window.swarmClient.on('telemetry', onTelemetry);
             window.swarmClient.on('command_ack', onCommandAck);
             window.swarmClient.on('status', onWsStatus);
+            window.swarmClient.on('hydration', onSessionHydration);
         }
 
         logEvent('SYSTEM', 'Tactical HUD & Command Deck Initialized.');
@@ -938,6 +939,81 @@
                 logEvent('ACK', `Command ${ack.cmd} acknowledged: ${JSON.stringify(ack)}`);
             }
         }
+    }
+
+    function onSessionHydration(bundle) {
+        if (!bundle) return;
+
+        // 1. Rehydrate Event History Log (TKT-32)
+        if (bundle.event_history && Array.isArray(bundle.event_history) && eventLogList) {
+            eventLogList.innerHTML = '';
+            bundle.event_history.forEach(evt => {
+                const timeStr = evt.wall_time || (evt.sim_time !== undefined && evt.sim_time !== null ? `T+${evt.sim_time}s` : '00:00:00');
+                const item = document.createElement('li');
+                item.className = `event-item type-${(evt.type || 'info').toLowerCase()}`;
+                item.innerHTML = `<span class="event-time">[${timeStr}]</span> <span class="event-type">[${evt.type}]</span> <span class="event-msg">${evt.message}</span>`;
+                eventLogList.appendChild(item);
+            });
+            while (eventLogList.children.length > 50) {
+                eventLogList.removeChild(eventLogList.firstChild);
+            }
+            eventLogList.scrollTop = eventLogList.scrollHeight;
+        }
+
+        // 2. Rehydrate Comms Mode Selector
+        if (bundle.comms_mode) {
+            ['btn-mode-tether', 'btn-mode-star', 'btn-mode-mesh'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    if ((id === 'btn-mode-tether' && bundle.comms_mode === 'TETHERED_RELAY') ||
+                        (id === 'btn-mode-star' && bundle.comms_mode === 'LEADER_FOLLOWER') ||
+                        (id === 'btn-mode-mesh' && bundle.comms_mode === 'GOSSIP_CONSENSUS')) {
+                        el.classList.add('active');
+                    } else {
+                        el.classList.remove('active');
+                    }
+                }
+            });
+        }
+
+        // 3. Rehydrate Formation Mode Selector
+        if (bundle.formation) {
+            const formMap = {
+                'ECHELON_ESCORT': 'btn-form-echelon',
+                'NATURAL_FLOCK': 'btn-form-boids',
+                'ORBIT_VORTEX': 'btn-form-vortex',
+                'PERIMETER_PATROL': 'btn-form-patrol'
+            };
+            const activeId = formMap[bundle.formation];
+            ['btn-form-echelon', 'btn-form-boids', 'btn-form-vortex', 'btn-form-patrol'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    if (id === activeId) el.classList.add('active');
+                    else el.classList.remove('active');
+                }
+            });
+        }
+
+        // 4. Rehydrate RF Jamming Slider & Display
+        if (bundle.rf_jamming !== undefined) {
+            const jammingSlider = document.getElementById('slider-rf-jamming');
+            const jammingReadout = document.getElementById('jamming-value');
+            if (jammingSlider) {
+                jammingSlider.value = Math.round(bundle.rf_jamming * 100);
+            }
+            if (jammingReadout) {
+                jammingReadout.textContent = `${Math.round(bundle.rf_jamming * 100)}%`;
+            }
+        }
+
+        // 5. Rehydrate Target Inputs
+        if (bundle.target && Array.isArray(bundle.target) && bundle.target.length === 3) {
+            if (inputX) inputX.value = bundle.target[0];
+            if (inputY) inputY.value = bundle.target[1];
+            if (inputZ) inputZ.value = bundle.target[2];
+        }
+
+        logEvent('HYDRATE', `Session state hydrated: ${bundle.event_history ? bundle.event_history.length : 0} historical events synchronized.`);
     }
 
     function onWsStatus(connected) {

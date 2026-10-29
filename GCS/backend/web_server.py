@@ -47,6 +47,11 @@ except ImportError:
     from backend.sim_core import SwarmSimulator, DT
     from backend.mavlink_bridge import MavlinkBridge
 
+try:
+    from GCS.backend.session_manager import SessionManager
+except ImportError:
+    from backend.session_manager import SessionManager
+
 logger = logging.getLogger("SwarmWebServer")
 
 
@@ -69,6 +74,13 @@ class SwarmWebServer:
         self.port: int = port
         self.fps: int = fps
         self.dt: float = 1.0 / float(fps)
+
+        # Persistent Telemetry Session & Reconnect Hydration Manager (TKT-32)
+        self.session_manager: SessionManager = SessionManager(max_events=100)
+        self._last_tether_severed: bool = False
+        self._last_crashed_ids: Set[int] = set()
+        self._last_leader_id: int = self.sim.leader.id if self.sim.leader else 0
+        self._last_rtb_active: bool = False
 
         if frontend_dir is None:
             candidate_gcs = Path(__file__).resolve().parent.parent / "frontend"
@@ -154,6 +166,7 @@ class SwarmWebServer:
             pos = cmd_dict.get("pos", [60.0, 40.0, 30.0])
             self.sim.patrol_active = False
             res = self.sim.set_target(pos)
+            self.session_manager.add_event("CMD", f"Dispatching Target -> ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})", sim_time=self.sim.sim_time)
             if isinstance(res, dict) and res.get("status") in ("OUT_OF_RANGE", "DROPPED"):
                 return {
                     "status": res.get("status"),
@@ -166,22 +179,29 @@ class SwarmWebServer:
         elif cmd in ("TOGGLE_PATROL", "TOGGLE_TARGET_PATROL", "SET_PATROL"):
             active = cmd_dict.get("active", None)
             state = self.sim.toggle_target_patrol(active)
+            self.session_manager.add_event("CMD", f"Target Auto-Patrol Loop {'ENGAGED' if state else 'DISENGAGED'}", sim_time=self.sim.sim_time)
             return {"status": "OK", "cmd": cmd, "patrol_active": state}
 
         elif cmd in ("TOGGLE_RNG_RECON", "TOGGLE_RNG", "RNG_RECON"):
             active = cmd_dict.get("active", None)
             state = self.sim.toggle_rng_recon(active)
+            self.session_manager.add_event("CMD", f"Tactical RNG Reconnaissance {'ENGAGED' if state else 'DISENGAGED'}", sim_time=self.sim.sim_time)
             return {"status": "OK", "cmd": cmd, "rng_recon_active": state}
 
         elif cmd in ("START_RNG_RECON", "START_RNG"):
-            return self.sim.start_rng_recon()
+            res = self.sim.start_rng_recon()
+            self.session_manager.add_event("CMD", "Tactical RNG Reconnaissance ENGAGED", sim_time=self.sim.sim_time)
+            return res
 
         elif cmd in ("STOP_RNG_RECON", "STOP_RNG"):
-            return self.sim.stop_rng_recon()
+            res = self.sim.stop_rng_recon()
+            self.session_manager.add_event("CMD", "Tactical RNG Reconnaissance STOPPED", sim_time=self.sim.sim_time)
+            return res
 
         elif cmd in ("START_ROUTE_PRESET", "SET_ROUTE_PRESET"):
             preset = cmd_dict.get("preset", cmd_dict.get("name", "BOX_PATROL"))
             res = self.sim.start_route_preset(preset)
+            self.session_manager.add_event("CMD", f"Deploying Mission Route Preset -> {preset}", sim_time=self.sim.sim_time)
             return res
 
         elif cmd in ("UPLOAD_MISSION_ROUTE", "DEPLOY_ROUTE", "SET_MISSION_ROUTE"):
@@ -189,15 +209,18 @@ class SwarmWebServer:
             loop = bool(cmd_dict.get("loop", True))
             name = str(cmd_dict.get("name", "CUSTOM"))
             res = self.sim.deploy_mission_route(waypoints, loop=loop, name=name)
+            self.session_manager.add_event("CMD", f"Uploaded Route '{name}' with {len(waypoints)} waypoints", sim_time=self.sim.sim_time)
             return res
 
         elif cmd in ("STOP_MISSION_ROUTE", "STOP_ROUTE", "ABORT_ROUTE"):
             res = self.sim.stop_mission_route()
+            self.session_manager.add_event("CMD", "Aborted active mission route: STOP_ROUTE", sim_time=self.sim.sim_time)
             return res
 
         elif cmd in ("SET_COMMS_MODE", "SET_MODE"):
             mode = cmd_dict.get("mode", "TETHERED_RELAY")
             ok = self.sim.set_comms_mode(mode)
+            self.session_manager.add_event("CMD", f"Swarm Architecture switched -> {mode}", sim_time=self.sim.sim_time)
             return {
                 "status": "OK" if ok else "ERROR",
                 "cmd": cmd,
@@ -208,6 +231,7 @@ class SwarmWebServer:
         elif cmd in ("SET_RF_JAMMING", "SET_JAMMING"):
             rate = float(cmd_dict.get("rate", cmd_dict.get("jamming", 0.0)))
             jamming = self.sim.set_rf_jamming(rate)
+            self.session_manager.add_event("CMD", f"Electronic Warfare RF Jamming set to {int(jamming*100)}%", sim_time=self.sim.sim_time)
             return {
                 "status": "OK",
                 "cmd": cmd,
@@ -217,15 +241,18 @@ class SwarmWebServer:
         elif cmd == "SET_FORMATION":
             mode = cmd_dict.get("mode", "ECHELON_ESCORT")
             self.sim.set_formation(mode)
+            self.session_manager.add_event("CMD", f"Changing Swarm Formation -> {mode}", sim_time=self.sim.sim_time)
             return {"status": "OK", "cmd": cmd, "formation": self.sim.formation_mode}
 
         elif cmd == "KILL_LEADER":
             self.sim.kill_leader()
             new_id = self.sim.leader.id if self.sim.leader else -1
+            self.session_manager.add_event("CASUALTY", f"Injected casualty: KILL_LEADER. New leader: Drone #{new_id}", sim_time=self.sim.sim_time)
             return {"status": "OK", "cmd": cmd, "new_leader_id": new_id}
 
         elif cmd in ("CUT_TETHER", "JETTISON_TETHER", "SEVER_TETHER"):
             self.sim.cut_tether()
+            self.session_manager.add_event("FAILSAFE", "Tactical umbilical manually severed: CUT_TETHER", sim_time=self.sim.sim_time)
             return {
                 "status": "OK",
                 "cmd": cmd,
@@ -235,15 +262,18 @@ class SwarmWebServer:
         elif cmd == "KILL_DRONE":
             drone_id = int(cmd_dict.get("id", 1))
             self.sim.kill_drone(drone_id)
+            self.session_manager.add_event("CASUALTY", f"Injected escort casualty: Drone #{drone_id} terminated", sim_time=self.sim.sim_time)
             return {"status": "OK", "cmd": cmd, "killed_id": drone_id}
 
         elif cmd == "REBOOT_DRONE":
             drone_id = int(cmd_dict.get("id", 1))
             self.sim.reboot_drone(drone_id)
+            self.session_manager.add_event("STATUS", f"Drone #{drone_id} rebooted and active", sim_time=self.sim.sim_time)
             return {"status": "OK", "cmd": cmd, "rebooted_id": drone_id}
 
         elif cmd in ("LAUNCH_REINFORCEMENT", "REINFORCE_SWARM", "SPAWN_REINFORCEMENT"):
             new_drone = self.sim.launch_reinforcement()
+            self.session_manager.add_event("LAUNCH", f"Reinforcement Drone #{new_drone.id} launched from base pad", sim_time=self.sim.sim_time)
             return {
                 "status": "OK",
                 "cmd": cmd,
@@ -253,6 +283,7 @@ class SwarmWebServer:
 
         elif cmd in ("REBOOT_ALL_DEAD", "RESPAWN_ALL_DEAD", "REBOOT_DEAD"):
             revived = self.sim.reboot_all_dead()
+            self.session_manager.add_event("STATUS", f"Respawned {len(revived)} destroyed drone(s) in-place", sim_time=self.sim.sim_time)
             return {
                 "status": "OK",
                 "cmd": cmd,
@@ -262,6 +293,7 @@ class SwarmWebServer:
 
         elif cmd in ("CLEAR_WRECKAGE", "SALVAGE_WRECKAGE", "CLEAR_CASUALTIES"):
             purged = self.sim.clear_crashed_wreckage()
+            self.session_manager.add_event("STATUS", f"Salvaged {len(purged)} destroyed wreckage from battlefield", sim_time=self.sim.sim_time)
             return {
                 "status": "OK",
                 "cmd": cmd,
@@ -272,10 +304,12 @@ class SwarmWebServer:
 
         elif cmd == "REBOOT_FLEET":
             self.sim.reboot_fleet()
+            self.session_manager.add_event("STATUS", "Tactical swarm reboot executed across fleet", sim_time=self.sim.sim_time)
             return {"status": "OK", "cmd": cmd, "drone_count": len(self.sim.drones)}
 
         elif cmd in ("RTB_HOLD", "COMMAND_RTB_HOLD", "RETURN_TO_BASE_HOLD", "RTB"):
             self.sim.command_rtb_hold()
+            self.session_manager.add_event("RTB", "Initiating Stage 1: Swarm RTB to overhead sentry hold (0,0,25)", sim_time=self.sim.sim_time)
             return {
                 "status": "OK",
                 "cmd": cmd,
@@ -285,6 +319,7 @@ class SwarmWebServer:
 
         elif cmd in ("CANCEL_RTB", "RESUME_MISSION"):
             self.sim.cancel_rtb()
+            self.session_manager.add_event("STATUS", "Cancelling recovery: Resuming normal swarm cruise", sim_time=self.sim.sim_time)
             return {
                 "status": "OK",
                 "cmd": cmd,
@@ -294,6 +329,7 @@ class SwarmWebServer:
 
         elif cmd in ("LAND_SWARM", "COMMAND_LAND_SWARM", "LAND_ALL"):
             queued = self.sim.command_land_swarm()
+            self.session_manager.add_event("ATC", f"Engaging Stage 2: Swarm ATC landing pad allocation for {len(queued)} drone(s)", sim_time=self.sim.sim_time)
             return {
                 "status": "OK",
                 "cmd": cmd,
@@ -304,16 +340,21 @@ class SwarmWebServer:
         elif cmd in ("LAND_DRONE", "COMMAND_LAND_DRONE"):
             drone_id = int(cmd_dict.get("id", cmd_dict.get("drone_id", 0)))
             success = self.sim.command_land_drone(drone_id)
+            if success:
+                self.session_manager.add_event("ATC", f"Commanding Drone #{drone_id} to soft-land on assigned pad", sim_time=self.sim.sim_time)
             return {"status": "OK" if success else "ERROR", "cmd": cmd, "drone_id": drone_id}
 
         elif cmd in ("TAKEOFF_DRONE", "RELAUNCH_DRONE"):
             drone_id = int(cmd_dict.get("id", cmd_dict.get("drone_id", 0)))
             success = self.sim.command_takeoff_drone(drone_id)
+            if success:
+                self.session_manager.add_event("TAKEOFF", f"Launching Drone #{drone_id} from pad: TAKEOFF_DRONE", sim_time=self.sim.sim_time)
             return {"status": "OK" if success else "ERROR", "cmd": cmd, "drone_id": drone_id}
 
         elif cmd == "SET_BRAIN":
             name = cmd_dict.get("brain", "LEADER_FOLLOWER")
             ok = self.sim.set_brain(name)
+            self.session_manager.add_event("CMD", f"Hot-swapping Brain Architecture -> {name}", sim_time=self.sim.sim_time)
             return {
                 "status": "OK" if ok else "INVALID_BRAIN",
                 "cmd": cmd,
@@ -335,7 +376,11 @@ class SwarmWebServer:
 
         self.active_websockets.add(ws)
 
-        # Immediately send current state on connect
+        # 1. Immediately send session hydration bundle to eliminate page-refresh amnesia (TKT-32)
+        hydration_bundle = self.session_manager.get_hydration_bundle(self.sim)
+        await ws.send_str(json.dumps(hydration_bundle))
+
+        # 2. Send initial telemetry state on connect
         initial_snapshot = self.sim.get_state_snapshot()
         initial_snapshot["type"] = "TELEMETRY_FRAME"
         await ws.send_str(json.dumps(initial_snapshot))
@@ -366,6 +411,32 @@ class SwarmWebServer:
             # Advance GCS C2 layer and physics simulation world
             self.sim.step_c2(interval)
             self.sim.step(interval, advance_c2=False)
+
+            # Track autonomous state transitions for session history (TKT-32)
+            if self.sim.tether_severed and not self._last_tether_severed:
+                self.session_manager.add_event("FAILSAFE", "Tactical Umbilical Severed! Physical cable snap detected.", sim_time=self.sim.sim_time)
+                self._last_tether_severed = True
+            elif not self.sim.tether_severed and self._last_tether_severed:
+                self.session_manager.add_event("STATUS", "Tactical umbilical reconnected / swarm rebooted.", sim_time=self.sim.sim_time)
+                self._last_tether_severed = False
+
+            cur_crashed = {d.id for d in self.sim.drones if d.crashed}
+            new_crashed = cur_crashed - self._last_crashed_ids
+            for cid in new_crashed:
+                self.session_manager.add_event("CASUALTY", f"Drone #{cid} crashed! Ballistic drop initiated.", sim_time=self.sim.sim_time)
+            self._last_crashed_ids = cur_crashed
+
+            cur_leader = self.sim.leader
+            cur_leader_id = cur_leader.id if cur_leader else -1
+            if cur_leader_id != self._last_leader_id and self._last_leader_id != -1 and cur_leader_id != -1:
+                self.session_manager.add_event("SUCCESSION", f"Autonomic Succession: Drone #{cur_leader_id} promoted to Swarm Leader", sim_time=self.sim.sim_time)
+                self._last_leader_id = cur_leader_id
+
+            if self.sim.swarm_rtb_active and not self._last_rtb_active:
+                self.session_manager.add_event("RTB", "Doctrine A 30s loiter grace period expired. Swarm RTB initiated to Base (0,0,25).", sim_time=self.sim.sim_time)
+                self._last_rtb_active = True
+            elif not self.sim.swarm_rtb_active and self._last_rtb_active:
+                self._last_rtb_active = False
 
             # Step UDP / MAVLink bridge if attached
             if self.bridge is not None:
