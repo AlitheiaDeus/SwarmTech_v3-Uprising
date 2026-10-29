@@ -831,6 +831,64 @@ html, body {
   100% { box-shadow: 0 0 16px rgba(0, 255, 170, 0.8); }
 }
 
+.route-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 10px;
+  margin-bottom: 4px;
+}
+
+.group-sub {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  color: var(--neon-cyan);
+  opacity: 0.85;
+}
+
+.badge-route-active {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(0, 255, 170, 0.2);
+  border: 1px solid var(--neon-emerald);
+  color: var(--neon-emerald);
+  text-shadow: 0 0 6px rgba(0, 255, 170, 0.6);
+  animation: pulse-patrol 2s infinite alternate;
+}
+
+.badge-route-inactive {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #5A7E96;
+}
+
+.btn-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 5px;
+}
+
+.route-btn {
+  font-size: 9px;
+  padding: 5px 2px;
+  font-weight: 700;
+  border-color: rgba(0, 240, 255, 0.4);
+}
+
+.route-btn.active-route {
+  background: rgba(0, 255, 170, 0.22);
+  border-color: var(--neon-emerald);
+  color: #FFFFFF;
+  box-shadow: 0 0 10px rgba(0, 255, 170, 0.5);
+}
+
 .coord-input-row {
   display: flex;
   gap: 6px;

@@ -161,6 +161,22 @@ class SwarmWebServer:
             state = self.sim.toggle_target_patrol(active)
             return {"status": "OK", "cmd": cmd, "patrol_active": state}
 
+        elif cmd in ("START_ROUTE_PRESET", "SET_ROUTE_PRESET"):
+            preset = cmd_dict.get("preset", cmd_dict.get("name", "BOX_PATROL"))
+            res = self.sim.start_route_preset(preset)
+            return res
+
+        elif cmd in ("UPLOAD_MISSION_ROUTE", "DEPLOY_ROUTE", "SET_MISSION_ROUTE"):
+            waypoints = cmd_dict.get("waypoints", [])
+            loop = bool(cmd_dict.get("loop", True))
+            name = str(cmd_dict.get("name", "CUSTOM"))
+            res = self.sim.deploy_mission_route(waypoints, loop=loop, name=name)
+            return res
+
+        elif cmd in ("STOP_MISSION_ROUTE", "STOP_ROUTE", "ABORT_ROUTE"):
+            res = self.sim.stop_mission_route()
+            return res
+
         elif cmd in ("SET_COMMS_MODE", "SET_MODE"):
             mode = cmd_dict.get("mode", "TETHERED_RELAY")
             ok = self.sim.set_comms_mode(mode)

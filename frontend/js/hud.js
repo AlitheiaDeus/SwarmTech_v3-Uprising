@@ -94,6 +94,13 @@
         setupBtn('btn-wp-bravo', () => dispatchTarget([-40.0, 70.0, 45.0], 'BRAVO'));
         setupBtn('btn-wp-charlie', () => dispatchTarget([50.0, -50.0, 25.0], 'CHARLIE'));
         setupBtn('btn-wp-rtb', () => dispatchTarget([0.0, 0.0, 20.0], 'RTB_BASE'));
+
+        // Discrete Mission Routes (TKT-28)
+        setupBtn('btn-route-box', () => deployRoutePreset('BOX_PATROL'));
+        setupBtn('btn-route-diamond', () => deployRoutePreset('DIAMOND_SURVEY'));
+        setupBtn('btn-route-hexagon', () => deployRoutePreset('HEXAGON_SWEEP'));
+        setupBtn('btn-stop-route', () => stopMissionRoute());
+
         setupBtn('btn-toggle-patrol', () => {
             logEvent('CMD', 'Toggling continuous 3D target auto-patrol loop: TOGGLE_PATROL');
             window.swarmClient?.send({ cmd: 'TOGGLE_PATROL' });
@@ -240,6 +247,16 @@
         if (inputZ) inputZ.value = pos[2];
     }
 
+    function deployRoutePreset(presetName) {
+        logEvent('CMD', `Deploying Mission Route Preset -> ${presetName}`);
+        window.swarmClient?.send({ cmd: 'START_ROUTE_PRESET', preset: presetName });
+    }
+
+    function stopMissionRoute() {
+        logEvent('CMD', 'Aborting active mission route: STOP_MISSION_ROUTE');
+        window.swarmClient?.send({ cmd: 'STOP_MISSION_ROUTE' });
+    }
+
     // =========================================================================
     // 2. Telemetry Ingestion & Real-Time Card Updates
     // =========================================================================
@@ -332,6 +349,37 @@
                     logEvent('STATUS', '3D Target Auto-Patrol Loop DISENGAGED.');
                 }
             }
+        }
+
+        // 4b2. Monitor Discrete Mission Route State (TKT-28)
+        const routeData = frame.mission_route;
+        const routeActiveBadge = document.getElementById('route-active-badge');
+        const btnStopRoute = document.getElementById('btn-stop-route');
+        const btnRouteBox = document.getElementById('btn-route-box');
+        const btnRouteDiamond = document.getElementById('btn-route-diamond');
+        const btnRouteHexagon = document.getElementById('btn-route-hexagon');
+
+        if (routeData && routeData.active) {
+            const currentIdx = (routeData.current_wp_idx || 0) + 1;
+            const totalWps = (routeData.waypoints ? routeData.waypoints.length : 0);
+            if (routeActiveBadge) {
+                routeActiveBadge.className = 'badge-route-active';
+                routeActiveBadge.textContent = `${routeData.name} [${currentIdx}/${totalWps}]`;
+            }
+            if (btnStopRoute) btnStopRoute.style.display = 'block';
+
+            if (btnRouteBox) btnRouteBox.classList.toggle('active-route', routeData.name === 'BOX_PATROL');
+            if (btnRouteDiamond) btnRouteDiamond.classList.toggle('active-route', routeData.name === 'DIAMOND_SURVEY');
+            if (btnRouteHexagon) btnRouteHexagon.classList.toggle('active-route', routeData.name === 'HEXAGON_SWEEP');
+        } else {
+            if (routeActiveBadge) {
+                routeActiveBadge.className = 'badge-route-inactive';
+                routeActiveBadge.textContent = 'STANDBY';
+            }
+            if (btnStopRoute) btnStopRoute.style.display = 'none';
+            if (btnRouteBox) btnRouteBox.classList.remove('active-route');
+            if (btnRouteDiamond) btnRouteDiamond.classList.remove('active-route');
+            if (btnRouteHexagon) btnRouteHexagon.classList.remove('active-route');
         }
 
         // 4c. Monitor Tactical Recovery & Soft-Landing (TKT-19)

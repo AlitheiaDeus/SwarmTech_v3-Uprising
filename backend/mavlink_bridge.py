@@ -265,6 +265,19 @@ class MavlinkBridge:
                 "comms_mode": self.sim.comms_mode,
             }
 
+        elif cmd in ("START_ROUTE_PRESET", "SET_ROUTE_PRESET"):
+            preset = cmd_dict.get("preset", cmd_dict.get("name", "BOX_PATROL"))
+            return self.sim.start_route_preset(preset)
+
+        elif cmd in ("UPLOAD_MISSION_ROUTE", "DEPLOY_ROUTE", "SET_MISSION_ROUTE"):
+            waypoints = cmd_dict.get("waypoints", [])
+            loop = bool(cmd_dict.get("loop", True))
+            name = str(cmd_dict.get("name", "CUSTOM"))
+            return self.sim.deploy_mission_route(waypoints, loop=loop, name=name)
+
+        elif cmd in ("STOP_MISSION_ROUTE", "STOP_ROUTE", "ABORT_ROUTE"):
+            return self.sim.stop_mission_route()
+
         else:
             # Check active brain hook
             brain_res = self.sim.brain.handle_command(cmd_dict)

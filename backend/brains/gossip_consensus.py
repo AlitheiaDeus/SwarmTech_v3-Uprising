@@ -58,6 +58,10 @@ class GossipConsensusBrain(BaseBrain):
         self.formation_mode: str = getattr(sim, "formation_mode", "PERIMETER_PATROL")
         self.formation_heading: float = 0.0
         self.heading_initialized: bool = False
+        self.route_waypoints: List[np.ndarray] = []
+        self.current_route_wp_idx: int = 0
+        self.route_active: bool = False
+        self.route_loop: bool = True
         self.reset()
 
     def reset(self) -> None:
@@ -65,10 +69,37 @@ class GossipConsensusBrain(BaseBrain):
         self.peer_states.clear()
         self.formation_heading = 0.0
         self.heading_initialized = False
+        self.route_waypoints.clear()
+        self.current_route_wp_idx = 0
+        self.route_active = False
+        self.route_loop = True
         for drone in self.sim.drones:
             self.peer_states[drone.id] = DronePeerState(
                 drone.id, self.sim.target_pos
             )
+
+    def on_route_deployed(self, clean_wps: List[np.ndarray], loop: bool = True) -> None:
+        """Receive newly uploaded discrete mission route (TKT-28)."""
+        self.route_waypoints = [np.copy(wp) for wp in clean_wps]
+        self.current_route_wp_idx = 0
+        self.route_active = True
+        self.route_loop = loop
+        self.current_seq += 1
+        first_wp = clean_wps[0]
+        for drone in self.sim.drones:
+            drone.mission_waypoints = [np.copy(wp) for wp in clean_wps]
+            drone.current_wp_idx = 0
+            drone.mission_active = True
+            drone.mission_loop = loop
+            drone.acknowledged_target = np.copy(first_wp)
+            if drone.id in self.peer_states:
+                state = self.peer_states[drone.id]
+                state.pending_seq = self.current_seq
+                state.pending_target = np.copy(first_wp)
+                state.active_seq = self.current_seq
+                state.active_target = np.copy(first_wp)
+                state.echo_ack_peers = {d.id for d in self.sim.drones if not d.crashed}
+                state.gossip_status = "COORDINATED"
 
     # ==========================================================================
     # 1. 10 Hz P2P Mesh Broadcast & Gossip Propagation
@@ -176,6 +207,38 @@ class GossipConsensusBrain(BaseBrain):
         living_count = len(active_drones)
         if living_count == 0:
             return accs
+
+        # Check Mission Route waypoint advancement for Gossip Quorum (TKT-28)
+        if self.route_active and self.route_waypoints:
+            wps = self.route_waypoints
+            idx = self.current_route_wp_idx
+            if 0 <= idx < len(wps):
+                target_wp = wps[idx]
+                # Measure consensus centroid distance to current waypoint
+                centroid = np.mean([d.pos for d in active_drones], axis=0)
+                dist_centroid = float(np.linalg.norm(centroid - target_wp))
+                if dist_centroid <= self.sim.route_acceptance_radius:
+                    if idx + 1 < len(wps):
+                        self.current_route_wp_idx += 1
+                        next_wp = wps[self.current_route_wp_idx]
+                    elif self.route_loop:
+                        self.current_route_wp_idx = 0
+                        next_wp = wps[0]
+                    else:
+                        self.route_active = False
+                        next_wp = target_wp
+
+                    if self.route_active:
+                        self.current_seq += 1
+                        for d in active_drones:
+                            d.current_wp_idx = self.current_route_wp_idx
+                            d.acknowledged_target = np.copy(next_wp)
+                            if d.id in self.peer_states:
+                                p_state = self.peer_states[d.id]
+                                p_state.active_seq = self.current_seq
+                                p_state.pending_seq = self.current_seq
+                                p_state.active_target = np.copy(next_wp)
+                                p_state.pending_target = np.copy(next_wp)
 
         # Deterministic decentralized slot indexing based on living drone IDs
         sorted_ids = sorted([d.id for d in active_drones])

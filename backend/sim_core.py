@@ -72,6 +72,30 @@ TIER_LEADER: int = 3
 TIER_ESCORT: int = 2
 TIER_SCOUT: int = 1
 
+# Discrete Waypoint Mission Route Presets (TKT-28)
+ROUTE_PRESETS: Dict[str, List[List[float]]] = {
+    "BOX_PATROL": [
+        [40.0, -20.0, 25.0],
+        [40.0, 40.0, 28.0],
+        [-20.0, 40.0, 25.0],
+        [-20.0, -20.0, 22.0],
+    ],
+    "DIAMOND_SURVEY": [
+        [50.0, 10.0, 28.0],
+        [15.0, 45.0, 25.0],
+        [-20.0, 10.0, 24.0],
+        [15.0, -25.0, 26.0],
+    ],
+    "HEXAGON_SWEEP": [
+        [45.0, 25.0, 26.0],
+        [20.0, 45.0, 28.0],
+        [-15.0, 30.0, 25.0],
+        [-25.0, -5.0, 24.0],
+        [-5.0, -30.0, 26.0],
+        [30.0, -20.0, 27.0],
+    ],
+}
+
 
 # ==============================================================================
 # Drone Airframe Representation
@@ -140,6 +164,12 @@ class Drone:
             np.array(pos, dtype=float) if pos is not None else np.array([60.0, 40.0, 30.0], dtype=float)
         )
 
+        # Discrete Waypoint Mission Queue (TKT-28)
+        self.mission_waypoints: List[np.ndarray] = []
+        self.current_wp_idx: int = 0
+        self.mission_active: bool = False
+        self.mission_loop: bool = True
+
     def reset_state(
         self,
         pos: np.ndarray,
@@ -177,6 +207,10 @@ class Drone:
         self.landing_wait_timer = 0.0
         self.landing_stage = "NONE"
         self.acknowledged_target = np.array(pos, dtype=float)
+        self.mission_waypoints = []
+        self.current_wp_idx = 0
+        self.mission_active = False
+        self.mission_loop = True
 
     def succession_score(self) -> int:
         """Calculate autonomic succession eligibility score: (Tier * 1000) - ID."""
@@ -210,6 +244,9 @@ class Drone:
             "landing_pad_idx": self.landing_pad_idx,
             "landing_stage": self.landing_stage,
             "acknowledged_target": [round(float(v), 2) for v in self.acknowledged_target],
+            "mission_active": self.mission_active,
+            "current_wp_idx": self.current_wp_idx,
+            "wp_count": len(self.mission_waypoints),
         }
 
 
@@ -251,6 +288,13 @@ class SwarmSimulator:
         self.overhead_marshal_active: bool = False
         self.recovery_stage: str = "IDLE"  # "IDLE", "OVERHEAD_MARSHAL", "LANDING"
         self.landing_pads: Dict[int, int] = {}  # pad_idx -> drone_id
+
+        # Discrete Waypoint Mission Routes (TKT-28)
+        self.route_active: bool = False
+        self.route_name: str = "NONE"
+        self.route_waypoints: List[np.ndarray] = []
+        self.route_loop: bool = True
+        self.route_acceptance_radius: float = 2.5
 
         # Dynamic Target Auto-Patrol Loop (TKT-12)
         self.patrol_active: bool = False
@@ -875,6 +919,11 @@ class SwarmSimulator:
         leader_drone.tether_jettisoned = False
         leader_drone.status = "BREAKAWAY_JETTISON"
 
+        # Abort mission route in Tethered Relay mode (TKT-28)
+        self.route_active = False
+        for d in self.drones:
+            d.mission_active = False
+
         # Demote leader and promote dynamic 2IC
         self._trigger_autonomic_succession(demote_old_leader=True)
 
@@ -1124,6 +1173,7 @@ class SwarmSimulator:
         drone.crashed = True
         drone.flight_state = "CRASHED"
         drone.status = "CRASHED"
+        was_leader = drone.is_leader
         if (drone.is_leader or drone.id == 0) and self.comms_mode == "TETHERED_RELAY":
             if not self.tether_severed:
                 self.tether_severed = True
@@ -1134,14 +1184,17 @@ class SwarmSimulator:
                 if self.lost_link_loiter_timer <= 0.0:
                     self.lost_link_loiter_timer = 30.0
                     self.swarm_rtb_active = False
-        if drone.is_leader:
+        if was_leader:
             drone.is_leader = False
-            self._trigger_autonomic_succession(demote_old_leader=True)
+            self._trigger_autonomic_succession(demote_old_leader=True, retired_leader=drone)
+        drone.mission_active = False
 
     # ==========================================================================
     # 5. Autonomic Leadership Succession
     # ==========================================================================
-    def _trigger_autonomic_succession(self, demote_old_leader: bool = True) -> Optional[Drone]:
+    def _trigger_autonomic_succession(
+        self, demote_old_leader: bool = True, retired_leader: Optional[Drone] = None
+    ) -> Optional[Drone]:
         """Elect the highest-scoring surviving follower to take over fleet guidance.
         Succession Score = (HardwareTier * 1000) - DroneID."""
         candidates = [
@@ -1158,7 +1211,7 @@ class SwarmSimulator:
         # Sort by succession score descending
         candidates.sort(key=lambda d: d.succession_score(), reverse=True)
         new_leader = candidates[0]
-        old_leader: Optional[Drone] = None
+        old_leader: Optional[Drone] = retired_leader
 
         # Demote previous leader
         if demote_old_leader:
@@ -1202,6 +1255,10 @@ class SwarmSimulator:
         new_leader.promotion_timer = 1.5
         if old_leader is not None:
             new_leader.acknowledged_target = np.copy(old_leader.acknowledged_target)
+            new_leader.mission_waypoints = [np.copy(wp) for wp in old_leader.mission_waypoints]
+            new_leader.current_wp_idx = old_leader.current_wp_idx
+            new_leader.mission_active = old_leader.mission_active
+            new_leader.mission_loop = old_leader.mission_loop
 
         # Notify active brain hook of succession
         if hasattr(self, "brain") and hasattr(self.brain, "on_succession"):
@@ -1525,6 +1582,12 @@ class SwarmSimulator:
         target_arr = np.array(pos, dtype=float)
         self._target_pos = target_arr
 
+        # Manual target dispatch disengages active mission route and auto-patrol
+        if self.route_active:
+            self.route_active = False
+            for d in self.drones:
+                d.mission_active = False
+
         # Dispatch across simulated uplink channel
         uplink_res = self.dispatch_target_uplink(self._target_pos)
 
@@ -1544,7 +1607,95 @@ class SwarmSimulator:
             self.patrol_active = not self.patrol_active
         if self.patrol_active:
             self.last_gossip_inject_time = 0.0
+            if self.route_active:
+                self.route_active = False
+                for d in self.drones:
+                    d.mission_active = False
         return self.patrol_active
+
+    def start_route_preset(self, preset_name: str) -> Dict[str, Any]:
+        """Deploy and start a predefined route preset (TKT-28)."""
+        name = preset_name.upper().replace("-", "_").replace(" ", "_")
+        if name not in ROUTE_PRESETS:
+            return {"status": "ERROR", "reason": f"Unknown preset: {preset_name}"}
+        wps = ROUTE_PRESETS[name]
+        return self.deploy_mission_route(wps, loop=True, name=name)
+
+    def deploy_mission_route(
+        self,
+        waypoints: Union[List[List[float]], List[np.ndarray]],
+        loop: bool = True,
+        name: str = "CUSTOM",
+    ) -> Dict[str, Any]:
+        """Deploy discrete waypoint mission route to the swarm over physical comms uplink (TKT-28)."""
+        if not waypoints:
+            return {"status": "ERROR", "reason": "Empty waypoints list"}
+
+        clean_wps = [np.array(wp, dtype=float) for wp in waypoints]
+
+        # Determine gateway drone for uplink
+        if self.active_brain_name == "GOSSIP_CONSENSUS":
+            living_drones = [d for d in self.drones if not d.crashed]
+            if not living_drones:
+                return {"status": "DROPPED", "reason": "NO_LIVING_DRONES"}
+            target_drone = min(
+                living_drones,
+                key=lambda d: float(np.linalg.norm(d.pos - self.tether_anchor)),
+            )
+        else:
+            target_drone = self.leader
+            if target_drone is None or target_drone.crashed:
+                return {"status": "DROPPED", "reason": "NO_ACTIVE_LEADER"}
+
+        # Calculate link distance and drop probability
+        dist_gcs = float(np.linalg.norm(target_drone.pos - self.tether_anchor))
+        is_hardline = (self.comms_mode == "TETHERED_RELAY" and not self.tether_severed and target_drone.id == 0)
+
+        if not is_hardline:
+            if self.comms_mode == "TETHERED_RELAY" and self.tether_severed:
+                return {"status": "DROPPED", "reason": "TETHER_SEVERED", "error": "Tactical umbilical is severed."}
+            if dist_gcs > RADIO_RANGE:
+                return {"status": "OUT_OF_RANGE", "reason": "RADIO_RANGE_EXCEEDED", "error": f"Gateway node ({dist_gcs:.1f}m) out of GCS radio range ({RADIO_RANGE}m)"}
+            if self.is_packet_dropped(dist_gcs, is_hardline=False):
+                return {"status": "DROPPED", "reason": "PACKET_LOSS"}
+
+        # Link healthy: deploy to GCS C2 state
+        self.route_active = True
+        self.route_name = name
+        self.route_waypoints = clean_wps
+        self.route_loop = loop
+        self.patrol_active = False  # Disable old continuous stream
+
+        # Upload to drone OBC
+        target_drone.mission_waypoints = [np.copy(wp) for wp in clean_wps]
+        target_drone.current_wp_idx = 0
+        target_drone.mission_active = True
+        target_drone.mission_loop = loop
+        target_drone.acknowledged_target = np.copy(clean_wps[0])
+
+        # If Gossip brain, disseminate route to peers
+        if self.active_brain_name == "GOSSIP_CONSENSUS" and hasattr(self.brain, "on_route_deployed"):
+            self.brain.on_route_deployed(clean_wps, loop=loop)
+
+        # Update Commanded Target at GCS
+        self._target_pos = np.copy(clean_wps[0])
+
+        return {
+            "status": "OK",
+            "name": self.route_name,
+            "waypoints": [list(wp) for wp in self.route_waypoints],
+            "count": len(self.route_waypoints),
+            "loop": self.route_loop,
+        }
+
+    def stop_mission_route(self) -> Dict[str, Any]:
+        """Stop active mission route and hold current position (TKT-28)."""
+        self.route_active = False
+        for d in self.drones:
+            d.mission_active = False
+        if hasattr(self.brain, "route_active"):
+            self.brain.route_active = False
+        return {"status": "OK", "action": "ROUTE_STOPPED"}
 
     # ==========================================================================
     # 7. Telemetry Snapshot Serialization
@@ -1566,6 +1717,23 @@ class SwarmSimulator:
             drones_list.append(d_dict)
 
         ack_target = self.get_acknowledged_target()
+
+        # Determine active route current waypoint index (TKT-28)
+        if self.active_brain_name == "GOSSIP_CONSENSUS":
+            current_wp_idx = getattr(self.brain, "current_route_wp_idx", 0)
+        elif current_leader is not None:
+            current_wp_idx = current_leader.current_wp_idx
+        else:
+            current_wp_idx = 0
+
+        route_data = {
+            "active": self.route_active,
+            "name": self.route_name,
+            "loop": self.route_loop,
+            "current_wp_idx": current_wp_idx,
+            "waypoints": [[round(float(v), 2) for v in wp] for wp in self.route_waypoints],
+        }
+
         return {
             "sim_time": round(float(self.sim_time), 3),
             "dt": DT,
@@ -1577,6 +1745,7 @@ class SwarmSimulator:
             "target": [round(float(v), 2) for v in self.target_pos],
             "commanded_target": [round(float(v), 2) for v in self.target_pos],
             "acknowledged_target": [round(float(v), 2) for v in ack_target],
+            "mission_route": route_data,
             "patrol_active": self.patrol_active,
             "two_ic_id": two_ic_id,
             "lost_link_loiter_timer": round(max(0.0, float(self.lost_link_loiter_timer)), 1),

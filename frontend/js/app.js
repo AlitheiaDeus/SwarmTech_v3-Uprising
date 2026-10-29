@@ -101,6 +101,7 @@
         createCommandedBeacon();
         createCatenaryTether();
         createRecoveryPads();
+        createMissionRouteGroup();
 
         // 7. Event Listeners
         window.addEventListener('resize', onWindowResize);
@@ -474,6 +475,138 @@
                 pad.ringMesh.material.color.setHex(0x00F0FF);
             }
         });
+    }
+
+    // =========================================================================
+    // 2c. Discrete Waypoint Mission Route Visuals (TKT-28)
+    // =========================================================================
+    let missionRouteGroup = null;
+    let routeLineMesh = null;
+    const routeWaypointMarkers = [];
+
+    function createMissionRouteGroup() {
+        missionRouteGroup = new THREE.Group();
+        missionRouteGroup.name = 'mission_route';
+        missionRouteGroup.visible = false;
+
+        const lineGeom = new THREE.BufferGeometry();
+        const lineMat = new THREE.LineBasicMaterial({
+            color: 0x00F0FF,
+            transparent: true,
+            opacity: 0.7,
+            linewidth: 2,
+        });
+        routeLineMesh = new THREE.LineLoop(lineGeom, lineMat);
+        missionRouteGroup.add(routeLineMesh);
+
+        scene.add(missionRouteGroup);
+    }
+
+    function updateMissionRouteVisuals(routeData) {
+        if (!missionRouteGroup) return;
+
+        if (!routeData || !routeData.active || !Array.isArray(routeData.waypoints) || routeData.waypoints.length === 0) {
+            missionRouteGroup.visible = false;
+            return;
+        }
+
+        missionRouteGroup.visible = true;
+        const wps = routeData.waypoints;
+        const currentIdx = routeData.current_wp_idx || 0;
+
+        // 1. Update polygon line points
+        const points = wps.map(wp => new THREE.Vector3(wp[0], wp[1], wp[2]));
+        routeLineMesh.geometry.setFromPoints(points);
+
+        // 2. Manage waypoint vertex beacon spheres
+        while (routeWaypointMarkers.length < wps.length) {
+            const markerGroup = new THREE.Group();
+
+            // Translucent glowing sphere
+            const sphereGeom = new THREE.SphereGeometry(0.7, 12, 12);
+            const sphereMat = new THREE.MeshBasicMaterial({
+                color: 0x00F0FF,
+                transparent: true,
+                opacity: 0.45,
+                wireframe: true,
+            });
+            const sphereMesh = new THREE.Mesh(sphereGeom, sphereMat);
+            markerGroup.add(sphereMesh);
+
+            // Ground projection drop circle
+            const circleGeom = new THREE.RingGeometry(0.6, 0.85, 16);
+            const circleMat = new THREE.MeshBasicMaterial({
+                color: 0x00F0FF,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.35,
+            });
+            const circleMesh = new THREE.Mesh(circleGeom, circleMat);
+            circleMesh.position.set(0, 0, 0.05);
+            markerGroup.add(circleMesh);
+
+            // Drop line from waypoint to ground
+            const dropGeom = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, 1),
+            ]);
+            const dropMat = new THREE.LineDashedMaterial({
+                color: 0x00F0FF,
+                dashSize: 1.0,
+                gapSize: 0.5,
+                transparent: true,
+                opacity: 0.35,
+            });
+            const dropLine = new THREE.Line(dropGeom, dropMat);
+            dropLine.computeLineDistances();
+            markerGroup.add(dropLine);
+
+            missionRouteGroup.add(markerGroup);
+            routeWaypointMarkers.push({
+                group: markerGroup,
+                sphere: sphereMesh,
+                circle: circleMesh,
+                dropLine: dropLine,
+            });
+        }
+
+        // Highlight active target waypoint vs upcoming waypoints
+        for (let i = 0; i < routeWaypointMarkers.length; i++) {
+            const m = routeWaypointMarkers[i];
+            if (i < wps.length) {
+                m.group.visible = true;
+                const wp = wps[i];
+                m.group.position.set(wp[0], wp[1], 0);
+                m.sphere.position.set(0, 0, wp[2]);
+
+                // Update drop line geometry
+                m.dropLine.geometry.setFromPoints([
+                    new THREE.Vector3(0, 0, 0),
+                    new THREE.Vector3(0, 0, wp[2]),
+                ]);
+                m.dropLine.computeLineDistances();
+
+                if (i === currentIdx) {
+                    m.sphere.material.color.setHex(0x00FFAA);
+                    m.sphere.material.opacity = 0.85;
+                    m.sphere.scale.set(1.3, 1.3, 1.3);
+                    m.circle.material.color.setHex(0x00FFAA);
+                    m.circle.material.opacity = 0.7;
+                    m.dropLine.material.color.setHex(0x00FFAA);
+                    m.dropLine.material.opacity = 0.65;
+                } else {
+                    m.sphere.material.color.setHex(0x00F0FF);
+                    m.sphere.material.opacity = 0.4;
+                    m.sphere.scale.set(1.0, 1.0, 1.0);
+                    m.circle.material.color.setHex(0x00F0FF);
+                    m.circle.material.opacity = 0.25;
+                    m.dropLine.material.color.setHex(0x00F0FF);
+                    m.dropLine.material.opacity = 0.25;
+                }
+            } else {
+                m.group.visible = false;
+            }
+        }
     }
 
     // =========================================================================
@@ -927,6 +1060,9 @@
 
         // Update Tactical Landing Pads (TKT-19)
         updateLandingPads(frame);
+
+        // Update Discrete Mission Route Visuals (TKT-28)
+        updateMissionRouteVisuals(frame.mission_route);
     }
 
     let tetherSeveredPrev = false;

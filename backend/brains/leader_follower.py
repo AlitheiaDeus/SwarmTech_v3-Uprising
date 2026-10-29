@@ -149,6 +149,24 @@ class LeaderFollowerBrain(BaseBrain):
                 else:
                     leader_speed = V_CRUISE
 
+                # Discrete Waypoint Mission Route Progression (TKT-28)
+                if getattr(drone, "mission_active", False) and getattr(drone, "mission_waypoints", None):
+                    wps = drone.mission_waypoints
+                    idx = drone.current_wp_idx
+                    if 0 <= idx < len(wps):
+                        target_wp = wps[idx]
+                        drone.acknowledged_target = target_wp
+                        dist = float(np.linalg.norm(drone.pos - target_wp))
+                        if dist <= self.sim.route_acceptance_radius:
+                            if idx + 1 < len(wps):
+                                drone.current_wp_idx += 1
+                                drone.acknowledged_target = wps[drone.current_wp_idx]
+                            elif getattr(drone, "mission_loop", True):
+                                drone.current_wp_idx = 0
+                                drone.acknowledged_target = wps[0]
+                            else:
+                                drone.mission_active = False
+
                 target_dest = getattr(drone, "acknowledged_target", self.sim.target_pos)
                 accs[drone.id] = self._steer_toward(
                     drone.pos, drone.vel, target_dest, max_speed=leader_speed
