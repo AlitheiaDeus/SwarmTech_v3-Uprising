@@ -460,14 +460,20 @@ class SwarmWebServer:
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
+    parser = argparse.ArgumentParser(description="SwarmTech3 Tactical GCS Web Server")
+    parser.add_argument("--port", type=int, default=8080, help="Web server port")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Web server host")
+    parser.add_argument("--count", type=int, default=8, help="Number of drones")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    sim = SwarmSimulator(drone_count=8)
-    server = SwarmWebServer(sim=sim, host="127.0.0.1", port=8080)
+    sim = SwarmSimulator(drone_count=args.count)
+    server = SwarmWebServer(sim=sim, host=args.host, port=args.port)
 
     async def main():
         await server.start()
-        print("SwarmTech3 WebGL GCS running at http://127.0.0.1:8080", flush=True)
+        print(f"SwarmTech3 WebGL GCS running at http://{args.host}:{args.port}", flush=True)
         try:
             while True:
                 await asyncio.sleep(1)

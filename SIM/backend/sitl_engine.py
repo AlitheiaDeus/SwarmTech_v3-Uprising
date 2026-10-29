@@ -1801,3 +1801,46 @@ __all__ = [
     "SwarmSimulator",
 ]
 
+
+if __name__ == "__main__":
+    import argparse
+    import time
+    try:
+        from SIM.backend.mavlink_bridge import MavlinkBridge
+    except ImportError:
+        from backend.mavlink_bridge import MavlinkBridge
+
+    parser = argparse.ArgumentParser(description="SwarmTech3 SITL World Simulation Engine")
+    parser.add_argument("--count", type=int, default=8, help="Number of drones")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="UDP host")
+    parser.add_argument("--tx-port", type=int, default=9000, help="UDP Telemetry TX port")
+    parser.add_argument("--rx-port", type=int, default=9001, help="UDP Command RX port")
+    parser.add_argument("--mavlink-port", type=int, default=14550, help="UDP MAVLink port")
+    args = parser.parse_args()
+
+    engine = SITLWorldEngine(drone_count=args.count)
+    bridge = MavlinkBridge(
+        sim=engine,
+        host=args.host,
+        tx_port=args.tx_port,
+        rx_port=args.rx_port,
+        mavlink_port=args.mavlink_port,
+    )
+
+    print(f"[SITL] Engine active: {args.count} drones @ 60 FPS", flush=True)
+    print(f"[SITL] Telemetry TX (UDP {args.tx_port}) | Command RX (UDP {args.rx_port}) | MAVLink (UDP {args.mavlink_port})", flush=True)
+
+    try:
+        while True:
+            t0 = time.perf_counter()
+            engine.step(DT)
+            bridge.step()
+            dt_step = time.perf_counter() - t0
+            sleep_time = max(0.0, DT - dt_step)
+            time.sleep(sleep_time)
+    except KeyboardInterrupt:
+        print("\n[SITL] Simulation engine terminated by operator.", flush=True)
+    finally:
+        bridge.close()
+
+
