@@ -34,7 +34,7 @@ class TestTetherFailsafes(unittest.TestCase):
         self.assertFalse(d0.is_leader)
         self.assertFalse(d0.crashed, "Drone 0 must not crash upon tether severance!")
         self.assertEqual(d0.status, "BREAKAWAY_JETTISON")
-        self.assertEqual(d0.jettison_timer, 1.5)
+        self.assertEqual(d0.jettison_watchdog, 6.0)
         self.assertFalse(d0.tether_jettisoned)
 
         # Dynamic 2IC (Drone 1) promoted to leader
@@ -63,7 +63,7 @@ class TestTetherFailsafes(unittest.TestCase):
         self.assertEqual(sim.drones[2].status, "PROMOTED_LEADER")
 
     def test_breakaway_dive_and_cable_purge(self):
-        """Drone 0 dives vertically and purges cable after 1.5 seconds."""
+        """Drone 0 dives vertically and purges cable after physical clearance gates are satisfied."""
         sim = SwarmSimulator(drone_count=6)
         for _ in range(60):
             sim.step()
@@ -73,23 +73,100 @@ class TestTetherFailsafes(unittest.TestCase):
 
         sim.cut_tether()
 
-        # Step 1.33s (80 ticks) into the 1.5s jettison dive
-        for _ in range(80):
+        # Step 50 ticks (~0.83s) into breakaway dive
+        for _ in range(50):
             sim.step()
 
-        # Drone 0 should be in breakaway dive below leader
-        self.assertLess(d0.pos[2], d1.pos[2] - 2.0, "Drone 0 should dive below leader during jettison!")
+        # Drone 0 should be actively diving in BREAKAWAY_JETTISON below leader
+        self.assertLess(d0.pos[2], d1.pos[2] - 1.0, "Drone 0 should dive below leader during jettison!")
         self.assertEqual(d0.status, "BREAKAWAY_JETTISON")
-        self.assertGreater(d0.jettison_timer, 0.0)
+        self.assertFalse(d0.tether_jettisoned)
 
-        # Step remaining time to reach t = 1.67s post-severance (20 more ticks)
-        for _ in range(20):
+        # Step remaining ticks until physical clearance is achieved (within 40 more ticks)
+        for _ in range(40):
             sim.step()
 
-        self.assertEqual(d0.jettison_timer, 0.0)
-        self.assertTrue(d0.tether_jettisoned)
+        self.assertTrue(d0.tether_jettisoned, "Drone 0 must purge cable once clearance envelope is met!")
         self.assertEqual(d0.status, "ACTIVE")
         self.assertFalse(d0.crashed)
+
+    def test_physical_clearance_envelope_gates(self):
+        """Umbilical jettison triggers strictly when altitude gate (Delta Z >= 4.0m) and lateral gate (Delta R_perp >= 3.0m) are met."""
+        sim = SwarmSimulator(drone_count=6)
+        for _ in range(60):
+            sim.step()
+
+        d0 = sim.drones[0]
+        d1 = sim.drones[1]
+
+        sim.cut_tether()
+        self.assertEqual(d0.status, "BREAKAWAY_JETTISON")
+        self.assertFalse(d0.tether_jettisoned)
+
+        # Step tick-by-tick and verify transition invariant
+        cleared = False
+        for tick in range(180):  # 3.0 seconds max
+            sim.step()
+            if d0.tether_jettisoned:
+                cleared = True
+                lead_z = d1.pos[2]
+                z_floor = max(3.0, lead_z - 4.5)
+                alt_cleared = (d0.pos[2] <= lead_z - 4.0) or (d0.pos[2] <= z_floor + 0.25)
+                peel_dir = getattr(d0, "peel_off_dir", np.zeros(3, dtype=float))
+                if float(np.linalg.norm(peel_dir[:2])) > 0.01:
+                    lat_offset = abs(float(np.dot(d0.pos[:2] - d1.pos[:2], peel_dir[:2])))
+                else:
+                    lat_offset = float(np.linalg.norm(d0.pos[:2] - d1.pos[:2]))
+                lat_cleared = lat_offset >= 3.0
+                self.assertTrue(
+                    (alt_cleared and lat_cleared) or (d0.jettison_watchdog <= 0.0),
+                    f"Cleared prematurely without satisfying gates: alt_cleared={alt_cleared}, lat_cleared={lat_cleared}"
+                )
+                break
+
+        self.assertTrue(cleared, "Drone 0 must achieve physical clearance envelope!")
+        self.assertEqual(d0.status, "ACTIVE")
+
+    def test_safety_floor_clamp_prevents_terrain_impact(self):
+        """Even at low initial formation altitude, breakaway dive respects safety floor max(3.0m, Z_lead - 4.5m)."""
+        sim = SwarmSimulator(drone_count=4)
+        # Position drones at low altitude (Z = 5.0m)
+        for d in sim.drones:
+            d.pos[2] = 5.0
+            d.vel = np.zeros(3, dtype=float)
+
+        d0 = sim.drones[0]
+        sim.cut_tether()
+
+        min_altitude = 999.0
+        for _ in range(120):
+            sim.step()
+            min_altitude = min(min_altitude, float(d0.pos[2]))
+
+        # Safety floor is max(3.0m, 5.0 - 4.5m) = 3.0m
+        self.assertGreaterEqual(
+            min_altitude,
+            2.9,
+            f"Drone 0 penetrated safety floor! min_altitude={min_altitude}m < 3.0m",
+        )
+        self.assertFalse(d0.crashed)
+
+    def test_jettison_watchdog_timeout(self):
+        """If clearance gates cannot be met (e.g. pinned), 6.0s watchdog triggers jettison fallback."""
+        sim = SwarmSimulator(drone_count=4)
+        sim.cut_tether()
+
+        d0 = sim.drones[0]
+        d1 = sim.drones[1]
+
+        # Artificially keep Drone 0 near leader (2.0m away, outside 1.5m clash but within 3.0m/4.0m gates)
+        for _ in range(365):  # > 6.0 seconds (360 ticks)
+            d0.pos = d1.pos + np.array([2.0, 0.0, 0.0], dtype=float)
+            d0.vel = np.zeros(3, dtype=float)
+            sim.step()
+
+        self.assertTrue(d0.tether_jettisoned, "Watchdog must force cable jettison after 6.0s timeout!")
+        self.assertEqual(d0.status, "ACTIVE")
 
     def test_escort_rejoin_after_purge(self):
         """Unencumbered Drone 0 climbs back to cruise altitude and rejoins formation with zero clashes."""

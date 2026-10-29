@@ -965,9 +965,9 @@
                 }
             }
 
-            // Animate severed line falling to ground and dissolving
+            // Animate severed line falling to ground and dissolving (1.5s at 60 FPS, TKT-27)
             if (tetherDropProgress < 1.0) {
-                tetherDropProgress = Math.min(1.0, tetherDropProgress + 0.025);
+                tetherDropProgress = Math.min(1.0, tetherDropProgress + 0.011);
                 tetherMesh.visible = true;
 
                 // Severed tip drops to ground and slack sags

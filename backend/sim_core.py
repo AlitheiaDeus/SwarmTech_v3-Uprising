@@ -123,8 +123,9 @@ class Drone:
         self.peel_off_dir: np.ndarray = np.zeros(3, dtype=float)
         self.promotion_timer: float = 0.0
 
-        # Tether Failsafes & Cable Jettison (TKT-16)
+        # Tether Failsafes & Cable Jettison (TKT-16 / TKT-27)
         self.jettison_timer: float = 0.0
+        self.jettison_watchdog: float = 6.0
         self.tether_jettisoned: bool = False
         self.tether_failsafe_policy: str = "REJOIN"  # "REJOIN" or "RTB"
 
@@ -168,6 +169,7 @@ class Drone:
         self.peel_off_dir = np.zeros(3, dtype=float)
         self.promotion_timer = 0.0
         self.jettison_timer = 0.0
+        self.jettison_watchdog = 6.0
         self.tether_jettisoned = False
         self.tether_failsafe_policy = "REJOIN"
         self.landing_pad_idx = None
@@ -201,6 +203,7 @@ class Drone:
             "status": self.status,
             "rotor_rpm": round(float(self.rotor_rpm), 0),
             "jettison_timer": round(float(self.jettison_timer), 2),
+            "jettison_watchdog": round(float(self.jettison_watchdog), 2),
             "tether_jettisoned": self.tether_jettisoned,
             "tether_lost": self.tether_lost,
             "tether_failsafe_policy": self.tether_failsafe_policy,
@@ -487,15 +490,37 @@ class SwarmSimulator:
                     # Loiter grace period expired: automated return to base (Stage 1 Overhead Marshal)
                     self.command_rtb_hold()
 
-        # 0c. Advance Drone Breakaway Jettison Timers (TKT-16)
+        # 0c. Advance Drone Breakaway Jettison State Machine (TKT-16 / TKT-27)
         for drone in self.drones:
-            if not drone.crashed and drone.jettison_timer > 0.0:
-                drone.jettison_timer = max(0.0, drone.jettison_timer - dt)
-                if drone.jettison_timer <= 0.0:
+            if not drone.crashed and drone.status == "BREAKAWAY_JETTISON" and not drone.tether_jettisoned:
+                drone.jettison_timer += dt
+                drone.jettison_watchdog = max(0.0, drone.jettison_watchdog - dt)
+
+                # Physical Clearance Envelope Gates:
+                # 1. Altitude gate: Delta Z >= 4.0m below formation or reached safety floor (max(3.0m, lead_z - 4.5m))
+                current_leader = self.leader
+                lead_z = current_leader.pos[2] if current_leader is not None else 20.0
+                z_floor = max(3.0, lead_z - 4.5)
+                alt_cleared = (drone.pos[2] <= lead_z - 4.0) or (drone.pos[2] <= z_floor + 0.25)
+
+                # 2. Lateral gate: Delta R_perp >= 3.0m displacement from leader/formation corridor
+                if current_leader is not None:
+                    peel_dir = getattr(drone, "peel_off_dir", np.zeros(3, dtype=float))
+                    if float(np.linalg.norm(peel_dir[:2])) > 0.01:
+                        lat_offset = abs(float(np.dot(drone.pos[:2] - current_leader.pos[:2], peel_dir[:2])))
+                    else:
+                        lat_offset = float(np.linalg.norm(drone.pos[:2] - current_leader.pos[:2]))
+                    lat_cleared = lat_offset >= 3.0
+                else:
+                    lat_cleared = True
+
+                # 3. Watchdog fallback (6.0s timeout)
+                watchdog_tripped = drone.jettison_watchdog <= 0.0
+
+                if (alt_cleared and lat_cleared) or watchdog_tripped:
                     drone.tether_jettisoned = True
                     drone.peel_off_timer = 0.0
-                    if drone.status == "BREAKAWAY_JETTISON":
-                        drone.status = "ACTIVE"
+                    drone.status = "ACTIVE"
 
         # 0d. Advance Drone Landing Stagger Clearance Timers (TKT-19)
         for drone in self.drones:
@@ -712,6 +737,15 @@ class SwarmSimulator:
                     drone.status = "FLEET_LEADER"
                     drone.flight_state = "CRUISE"
 
+            # Strict safety floor clamp during breakaway dive (TKT-27)
+            if drone.status == "BREAKAWAY_JETTISON" and not drone.tether_jettisoned:
+                lead_z = self.leader.pos[2] if self.leader is not None else 20.0
+                z_floor = max(3.0, lead_z - 4.5)
+                if drone.pos[2] < z_floor:
+                    drone.pos[2] = z_floor
+                    if drone.vel[2] < 0.0:
+                        drone.vel[2] = 0.0
+
             # Floor safety clamp (keep airborne above 0.5m)
             if drone.pos[2] < 0.5:
                 drone.pos[2] = 0.5
@@ -833,10 +867,11 @@ class SwarmSimulator:
 
     def _snap_tether(self, leader_drone: Drone, reason: str = "") -> None:
         """Snap tether, initiate umbilical emergency breakaway dive on leader,
-        dynamically promote 2IC, and initiate Doctrine A loiter timer (TKT-16)."""
+        dynamically promote 2IC, and initiate Doctrine A loiter timer (TKT-16 / TKT-27)."""
         self.tether_severed = True
         leader_drone.tether_lost = True
-        leader_drone.jettison_timer = 1.5
+        leader_drone.jettison_watchdog = 6.0
+        leader_drone.jettison_timer = 0.0
         leader_drone.tether_jettisoned = False
         leader_drone.status = "BREAKAWAY_JETTISON"
 
@@ -1094,6 +1129,7 @@ class SwarmSimulator:
                 self.tether_severed = True
                 drone.tether_lost = True
                 drone.jettison_timer = 0.0
+                drone.jettison_watchdog = 0.0
                 drone.tether_jettisoned = True
                 if self.lost_link_loiter_timer <= 0.0:
                     self.lost_link_loiter_timer = 30.0
@@ -1131,7 +1167,7 @@ class SwarmSimulator:
                     old_leader = drone
                     drone.is_leader = False
                     if not drone.crashed:
-                        if drone.jettison_timer > 0.0:
+                        if getattr(drone, "tether_lost", False) and not getattr(drone, "tether_jettisoned", False):
                             drone.status = "BREAKAWAY_JETTISON"
                         else:
                             drone.status = "ACTIVE"

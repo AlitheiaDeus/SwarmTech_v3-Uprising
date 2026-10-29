@@ -162,13 +162,18 @@ class LeaderFollowerBrain(BaseBrain):
                 )
                 continue
 
-            # 2b. Breakaway Dive & Cable Jettison Guidance (TKT-16)
-            if getattr(drone, "jettison_timer", 0.0) > 0.0:
-                # Vertical dive corridor: step down 4.0m below formation plane
+            # 2b. Breakaway Dive & Cable Jettison Guidance (TKT-16 / TKT-27)
+            if drone.status == "BREAKAWAY_JETTISON" and not getattr(drone, "tether_jettisoned", False):
+                # Vertical dive corridor: step down 4.0m below formation plane with strict safety floor
                 lead_z = current_leader.pos[2] if current_leader is not None else drone.pos[2]
-                target_z = max(1.0, lead_z - 4.0)
-                desired_vz = float(np.clip(3.0 * (target_z - drone.pos[2]), -6.0, 2.0))
-                a_dive_z = float(np.clip(4.0 * (desired_vz - drone.vel[2]), -15.0, 8.0))
+                z_floor = max(3.0, lead_z - 4.5)
+                target_z = max(z_floor, lead_z - 4.0)
+
+                # Smoothly cushion sink rate near safety floor to prevent inertia overshoot
+                dist_to_floor = max(0.0, drone.pos[2] - z_floor)
+                max_sink = min(6.5, max(0.8, dist_to_floor * 2.5))
+                desired_vz = float(np.clip(3.5 * (target_z - drone.pos[2]), -max_sink, 2.0))
+                a_dive_z = float(np.clip(5.0 * (desired_vz - drone.vel[2]), -18.0, 15.0))
 
                 # Lateral push away from formation
                 heading = np.array([math.cos(self.formation_heading), math.sin(self.formation_heading), 0.0], dtype=float)
@@ -176,11 +181,11 @@ class LeaderFollowerBrain(BaseBrain):
                 if float(np.linalg.norm(peel_dir)) < 0.01:
                     peel_dir = np.array([-heading[1], heading[0], 0.0], dtype=float)
                 v_peel_target = peel_dir * 6.0
-                a_peel_lat = (v_peel_target - drone.vel) * 2.0
+                a_peel_lat = (v_peel_target - drone.vel) * 2.5
 
                 # Longitudinal forward speed braking
                 v_long = float(np.dot(drone.vel, heading))
-                a_brake_long = -v_long * 2.0 * heading
+                a_brake_long = -v_long * 2.5 * heading
 
                 accs[drone.id] = np.array([
                     a_peel_lat[0] + a_brake_long[0],
