@@ -62,7 +62,7 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
             async with session.get(f"http://127.0.0.1:{self.port}/") as resp:
                 self.assertEqual(resp.status, 200)
                 html = await resp.text()
-                self.assertIn("SwarmTech3_UpRising", html)
+                self.assertIn("AlitheiaHive_v3-Uprising", html)
                 self.assertIn("viewport-container", html)
                 self.assertIn("left-panel", html)
                 self.assertIn("right-panel", html)

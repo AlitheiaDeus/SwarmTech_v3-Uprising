@@ -440,6 +440,17 @@ class SITLWorldEngine:
     def rng_tether_clearance(self, val: float) -> None:
         self.c2.rng_tether_clearance = val
 
+    @property
+    def rng_status(self) -> str:
+        return self.c2.rng_status
+
+    @property
+    def rng_paused(self) -> bool:
+        return self.c2.rng_paused
+
+    def is_link_active(self) -> bool:
+        return self.c2.is_link_active()
+
     def get_acknowledged_target(self) -> np.ndarray:
         """Return the current onboard target acknowledged by the active swarm guidance."""
         if self.comms_mode in ("TETHERED_RELAY", "LEADER_FOLLOWER"):
@@ -1645,6 +1656,8 @@ class SITLWorldEngine:
                 "dwell_timer": round(max(0.0, float(self.rng_dwell_timer)), 1),
                 "dwell_time": float(self.rng_dwell_time),
                 "station_count": int(self.rng_station_count),
+                "status": self.rng_status,
+                "paused": self.rng_paused,
             },
             "two_ic_id": two_ic_id,
             "lost_link_loiter_timer": round(max(0.0, float(self.lost_link_loiter_timer)), 1),

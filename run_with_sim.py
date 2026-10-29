@@ -156,7 +156,7 @@ async def run_smoke_test(args: argparse.Namespace) -> int:
     """Headless 2.0s automated verification test.
     Validates SITL kinematics, safety zones, tether, radio comms, UDP sockets, and GCS WebSocket server."""
     print("=" * 64)
-    print(" [SwarmTech3_UpRising] Running Automated Headless Smoke Test")
+    print(" [AlitheiaHive_v3-Uprising] Running Automated Headless Smoke Test")
     print("=" * 64)
 
     start_wall = time.perf_counter()

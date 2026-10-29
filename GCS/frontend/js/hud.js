@@ -394,21 +394,27 @@
             if (btnRouteHexagon) btnRouteHexagon.classList.remove('active-route');
         }
 
-        // 4b3. Monitor Tactical RNG Reconnaissance State (TKT-29)
+        // 4b3. Monitor Tactical RNG Reconnaissance State (TKT-29 & TKT-31)
         const rngData = frame.rng_recon;
         const btnRng = document.getElementById('btn-toggle-rng');
         if (rngData && rngData.active) {
+            const isOffline = (rngData.status === 'UPLINK_OFFLINE' || !!rngData.paused);
             if (btnRng) {
                 btnRng.classList.add('active-rng');
-                if (rngData.dwelling) {
+                btnRng.classList.toggle('btn-rng-offline', isOffline);
+                if (isOffline) {
+                    btnRng.innerHTML = `&#x1F3B2; UPLINK OFFLINE`;
+                } else if (rngData.dwelling) {
                     btnRng.innerHTML = `&#x1F3B2; DWELL (${Number(rngData.dwell_timer || 0).toFixed(1)}s)`;
                 } else {
                     btnRng.innerHTML = `&#x1F3B2; STATION #${rngData.station_count || 0}`;
                 }
             }
             if (routeActiveBadge && (!routeData || !routeData.active)) {
-                routeActiveBadge.className = 'badge-route-active';
-                if (rngData.dwelling) {
+                routeActiveBadge.className = isOffline ? 'badge-route-active badge-route-offline' : 'badge-route-active';
+                if (isOffline) {
+                    routeActiveBadge.textContent = 'RNG [LINK LOST: HOLDING BEACON]';
+                } else if (rngData.dwelling) {
                     routeActiveBadge.textContent = `RNG [DWELL ${Number(rngData.dwell_timer || 0).toFixed(1)}s]`;
                 } else {
                     routeActiveBadge.textContent = `RNG [STATION #${rngData.station_count || 0}]`;
@@ -416,7 +422,7 @@
             }
         } else {
             if (btnRng) {
-                btnRng.classList.remove('active-rng');
+                btnRng.classList.remove('active-rng', 'btn-rng-offline');
                 btnRng.innerHTML = '&#x1F3B2; RNG RECON';
             }
         }

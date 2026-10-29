@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/WebGL-Three.js_r128-00F0FF?logo=three.js&logoColor=white" alt="Three.js">
   <img src="https://img.shields.io/badge/Architecture-4--Airgap_Decoupled-00FFAA" alt="4-Airgap Decoupled">
   <img src="https://img.shields.io/badge/Physics-60_FPS_Kinematic_Twin-FFB800" alt="60 FPS">
-  <img src="https://img.shields.io/badge/Tests-108%2F108_Passing-brightgreen" alt="Tests 108/108 Passing">
+  <img src="https://img.shields.io/badge/Tests-113%2F113_Passing-brightgreen" alt="Tests 113/113 Passing">
   <img src="https://img.shields.io/badge/License-MIT-gray" alt="MIT License">
 </p>
 
@@ -133,7 +133,7 @@ python -m unittest discover tests
 ```
 
 ```text
-Ran 108 tests in 0.485s
+Ran 113 tests in 5.466s
 
 OK
 ```
@@ -163,7 +163,7 @@ AlitheiaHive_v3-Uprising/
 ├── SIM/                            # Bubble 3: SITL World Simulator (The God-View / Sim Airgap)
 │   ├── backend/                    # Kinematic FC twin, 4-zone safety, tether dynamics, RF channel, casualty lab
 │   └── frontend/                   # (God-view omniscient truth viewport & debug overlay)
-└── tests/                          # Automated unit test suite (108 tests)
+└── tests/                          # Automated unit test suite (113 tests)
     ├── __init__.py
     ├── test_sim_core.py            # Physics, 4-zone avoidance, tether snap, LKP tests
     ├── test_brains.py              # Brain plugins, P2P gossip wave, quorum tests
@@ -177,7 +177,8 @@ AlitheiaHive_v3-Uprising/
     ├── test_c2_decoupling.py       # Ground truth vs autopilot decoupling
     ├── test_mission_routes.py      # Discrete waypoint mission queues (TKT-28)
     ├── test_rng_recon.py           # Tactical RNG touch-and-go generator (TKT-29)
-    └── test_session_hydration.py   # Persistent telemetry session hydration (TKT-32)
+    ├── test_session_hydration.py   # Persistent telemetry session hydration (TKT-32)
+    └── test_c2_downlink_gate.py    # Downlink arrival handshake & uplink hold (TKT-31)
 ```
 
 ---

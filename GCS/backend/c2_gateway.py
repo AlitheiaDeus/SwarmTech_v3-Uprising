@@ -69,7 +69,7 @@ class C2Gateway:
         self.route_loop: bool = True
         self.route_acceptance_radius: float = 2.5
 
-        # Tactical RNG Touch-and-Go Reconnaissance (TKT-29)
+        # Tactical RNG Touch-and-Go Reconnaissance (TKT-29 & TKT-31)
         self.rng_recon_active: bool = False
         self.rng_dwelling: bool = False
         self.rng_dwell_time: float = 2.0         # 2.0s tactical dwell / sensor scan countdown
@@ -79,6 +79,8 @@ class C2Gateway:
         self.rng_geofence_max: np.ndarray = np.array([70.0, 70.0, 35.0], dtype=float)
         self.rng_min_variance: float = 15.0      # Minimum transit jump distance (m)
         self.rng_tether_clearance: float = 3.0   # Horizontal clearance from anchor (m)
+        self.rng_status: str = "IDLE"            # "IDLE", "TRACKING", "DWELLING", "UPLINK_OFFLINE"
+        self.rng_paused: bool = False            # True when uplink fails or link is lost
 
     @property
     def target_pos(self) -> np.ndarray:
@@ -140,8 +142,26 @@ class C2Gateway:
                 if active_brain == "GOSSIP_CONSENSUS" and res.get("status") == "OK":
                     self.last_gossip_inject_time = sim_time
 
-        # 2. Tactical RNG Touch-and-Go Reconnaissance Generator (TKT-29)
+        # 2. Tactical RNG Touch-and-Go Reconnaissance Generator (TKT-29 & TKT-31)
         elif self.rng_recon_active:
+            link_ok = self.is_link_active()
+
+            if not link_ok:
+                # Comms channel broken (tether cut, out of RF range, jammed)
+                self.rng_status = "UPLINK_OFFLINE"
+                self.rng_paused = True
+                # Freeze commanded target, halt dwell countdown, do NOT re-roll coordinates
+                return
+
+            # Link healthy: if previously paused in UPLINK_OFFLINE, attempt graceful recovery
+            if self.rng_paused:
+                res = self.dispatch_target_uplink(self._target_pos)
+                if res.get("status") == "OK":
+                    self.rng_paused = False
+                    self.rng_status = "TRACKING"
+                else:
+                    return
+
             target_reached = self.is_target_reached()
             if target_reached:
                 if not self.rng_dwelling:
@@ -149,24 +169,85 @@ class C2Gateway:
                     self.rng_dwelling = True
                     self.rng_dwell_timer = self.rng_dwell_time
                     self.rng_station_count += 1
+                    self.rng_status = "DWELLING"
                 else:
                     self.rng_dwell_timer = max(0.0, self.rng_dwell_timer - dt)
                     if self.rng_dwell_timer <= 0.0:
                         # Dwell complete: compute new randomized, high-variance SAFE target
                         new_target = self.generate_safe_rng_target()
-                        self._target_pos = np.copy(new_target)
                         res = self.dispatch_target_uplink(new_target)
                         if res.get("status") == "OK":
+                            self._target_pos = np.copy(new_target)
                             self.rng_dwelling = False
+                            self.rng_status = "TRACKING"
+                            self.rng_paused = False
                             active_brain = getattr(self.sim, "active_brain_name", "")
                             if active_brain == "GOSSIP_CONSENSUS":
                                 self.last_gossip_inject_time = sim_time
+                        else:
+                            # Uplink failed: Freeze Commanded Target, enter UPLINK_OFFLINE hold
+                            self.rng_status = "UPLINK_OFFLINE"
+                            self.rng_paused = True
             else:
                 self.rng_dwelling = False
+                self.rng_status = "TRACKING"
+
+    def is_link_active(self) -> bool:
+        """Check whether the bidirectional communications link between GCS and fleet is healthy.
+        Enforces Operator Airgap: if physical umbilical is cut or RF horizon is exceeded,
+        the GCS loses telemetry reception and cannot receive arrival pings."""
+        if self.sim is None:
+            return False
+
+        comms_mode = getattr(self.sim, "comms_mode", "TETHERED_RELAY")
+        tether_severed = getattr(self.sim, "tether_severed", False)
+        anchor = getattr(self.sim, "tether_anchor", TETHER_ANCHOR)
+        drones = getattr(self.sim, "drones", [])
+        active_brain = getattr(self.sim, "active_brain_name", "")
+
+        # 1. Hardline Tether: Cable severed means zero comms between GCS and Drone 0
+        if comms_mode == "TETHERED_RELAY":
+            if tether_severed:
+                return False
+            leader = getattr(self.sim, "leader", None)
+            return leader is not None and not leader.crashed
+
+        # 2. Wireless Star: Dependent on RF line-of-sight and range
+        elif comms_mode == "LEADER_FOLLOWER":
+            leader = getattr(self.sim, "leader", None)
+            if leader is None or leader.crashed or getattr(leader, "lost_link", False):
+                return False
+            d_gcs = float(np.linalg.norm(leader.pos - anchor))
+            if d_gcs > RADIO_RANGE:
+                return False
+            if hasattr(self.sim, "is_packet_dropped") and self.sim.is_packet_dropped(d_gcs, is_hardline=False):
+                return False
+            return True
+
+        # 3. P2P Gossip Mesh: Needs at least one non-crashed gateway drone in GCS radio range
+        elif active_brain == "GOSSIP_CONSENSUS" or comms_mode == "P2P_GOSSIP_MESH":
+            living = [d for d in drones if not d.crashed]
+            if not living:
+                return False
+            min_dist = min(float(np.linalg.norm(d.pos - anchor)) for d in living)
+            if min_dist > RADIO_RANGE:
+                return False
+            if hasattr(self.sim, "is_packet_dropped") and self.sim.is_packet_dropped(min_dist, is_hardline=False):
+                return False
+            return True
+
+        return False
 
     def is_target_reached(self, threshold: float = 2.5) -> bool:
-        """Deterministic arrival check: whether active swarm guidance has arrived within threshold."""
+        """Deterministic arrival check: whether active swarm guidance has arrived within threshold.
+        Enforces Operator Airgap:
+        1. If comms link is lost/severed, GCS receives NO arrival packets (returns False).
+        2. Reads arrival strictly from downlinked telemetry handshake."""
         if self.sim is None:
+            return False
+
+        # Telemetry link gate: severed tether or lost RF link suppresses arrival downlink
+        if not self.is_link_active():
             return False
 
         active_brain = getattr(self.sim, "active_brain_name", "")
@@ -186,6 +267,9 @@ class C2Gateway:
             leader = getattr(self.sim, "leader", None)
             if leader is None or leader.crashed:
                 return False
+            # Telemetry handshake from leader downlinked state
+            if hasattr(leader, "target_reached"):
+                return bool(leader.target_reached)
             target = leader.acknowledged_target
             return float(np.linalg.norm(leader.pos - target)) <= threshold
 
@@ -250,6 +334,8 @@ class C2Gateway:
         if self.rng_recon_active:
             self.rng_recon_active = False
             self.rng_dwelling = False
+            self.rng_status = "IDLE"
+            self.rng_paused = False
 
         uplink_res = self.dispatch_target_uplink(self._target_pos)
 
@@ -280,6 +366,8 @@ class C2Gateway:
             if self.rng_recon_active:
                 self.rng_recon_active = False
                 self.rng_dwelling = False
+                self.rng_status = "IDLE"
+                self.rng_paused = False
         return self.patrol_active
 
     def start_route_preset(self, preset_name: str) -> Dict[str, Any]:
@@ -350,6 +438,8 @@ class C2Gateway:
         self.patrol_active = False
         self.rng_recon_active = False
         self.rng_dwelling = False
+        self.rng_status = "IDLE"
+        self.rng_paused = False
 
         # Upload to drone OBC
         target_drone.mission_waypoints = [np.copy(wp) for wp in clean_wps]
@@ -386,7 +476,7 @@ class C2Gateway:
         return {"status": "OK", "action": "ROUTE_STOPPED"}
 
     def toggle_rng_recon(self, active: Optional[bool] = None) -> bool:
-        """Toggle or explicitly set tactical RNG Touch-and-Go reconnaissance mode (TKT-29)."""
+        """Toggle or explicitly set tactical RNG Touch-and-Go reconnaissance mode (TKT-29 & TKT-31)."""
         if active is not None:
             self.rng_recon_active = bool(active)
         else:
@@ -398,13 +488,23 @@ class C2Gateway:
             self.rng_dwelling = False
             self.rng_dwell_timer = 0.0
 
-            if self.is_target_reached():
+            if not self.is_link_active():
+                self.rng_status = "UPLINK_OFFLINE"
+                self.rng_paused = True
+            elif self.is_target_reached():
                 self.rng_dwelling = True
                 self.rng_dwell_timer = self.rng_dwell_time
                 self.rng_station_count += 1
+                self.rng_status = "DWELLING"
+                self.rng_paused = False
+            else:
+                self.rng_status = "TRACKING"
+                self.rng_paused = False
         else:
             self.rng_dwelling = False
             self.rng_dwell_timer = 0.0
+            self.rng_status = "IDLE"
+            self.rng_paused = False
 
         return self.rng_recon_active
 

@@ -897,6 +897,20 @@ html, body {
   animation: pulse-patrol 2s infinite alternate;
 }
 
+.badge-route-offline {
+  background: rgba(255, 51, 102, 0.2) !important;
+  border: 1px solid var(--neon-red) !important;
+  color: var(--neon-red) !important;
+  text-shadow: 0 0 6px rgba(255, 51, 102, 0.6) !important;
+  animation: pulse-patrol 1s infinite alternate !important;
+}
+
+.btn-rng-offline {
+  border-color: var(--neon-red) !important;
+  color: var(--neon-red) !important;
+  box-shadow: 0 0 10px rgba(255, 51, 102, 0.4) inset !important;
+}
+
 .badge-route-inactive {
   font-size: 9px;
   font-weight: 700;
