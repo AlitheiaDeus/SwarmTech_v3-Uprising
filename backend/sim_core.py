@@ -212,6 +212,13 @@ class Drone:
         self.mission_active = False
         self.mission_loop = True
 
+    @property
+    def target_reached(self) -> bool:
+        """Whether this drone has arrived within 2.5m acceptance radius of its acknowledged target."""
+        if self.crashed:
+            return False
+        return float(np.linalg.norm(self.pos - self.acknowledged_target)) <= 2.5
+
     def succession_score(self) -> int:
         """Calculate autonomic succession eligibility score: (Tier * 1000) - ID."""
         return (self.tier * 1000) - self.id
@@ -247,6 +254,7 @@ class Drone:
             "mission_active": self.mission_active,
             "current_wp_idx": self.current_wp_idx,
             "wp_count": len(self.mission_waypoints),
+            "target_reached": self.target_reached,
         }
 
 
@@ -303,6 +311,17 @@ class SwarmSimulator:
         self.patrol_center: np.ndarray = np.array([20.0, 20.0, 28.0], dtype=float)
         self.patrol_scale: np.ndarray = np.array([50.0, 35.0, 10.0], dtype=float)
         self.last_gossip_inject_time: float = 0.0
+
+        # Tactical RNG Touch-and-Go Reconnaissance (TKT-29)
+        self.rng_recon_active: bool = False
+        self.rng_dwelling: bool = False
+        self.rng_dwell_time: float = 2.0         # 2.0s tactical dwell / sensor scan countdown
+        self.rng_dwell_timer: float = 0.0
+        self.rng_station_count: int = 0
+        self.rng_geofence_min: np.ndarray = np.array([-50.0, -50.0, 10.0], dtype=float)
+        self.rng_geofence_max: np.ndarray = np.array([70.0, 70.0, 35.0], dtype=float)
+        self.rng_min_variance: float = 15.0      # Minimum transit jump distance (m)
+        self.rng_tether_clearance: float = 3.0   # Horizontal clearance from anchor (m)
 
         # Build Drone Fleet
         self.drones: List[Drone] = []
@@ -491,33 +510,55 @@ class SwarmSimulator:
     # Step Integration Loop (60 FPS) & GCS C2 Dispatcher (TKT-25)
     # ==========================================================================
     def step_c2(self, dt: float) -> None:
-        """Advance GCS C2 layer: auto-patrol trajectory generation and periodic uplink transmission."""
-        if not self.patrol_active:
-            return
+        """Advance GCS C2 layer: auto-patrol trajectory generation, RNG recon touch-and-go, and periodic uplink transmission."""
+        # 1. Continuous Auto-Patrol Loop (TKT-12)
+        if self.patrol_active:
+            self.patrol_time += dt * self.patrol_speed
+            t = self.patrol_time
+            patrol_x = float(self.patrol_center[0] + self.patrol_scale[0] * math.cos(t))
+            patrol_y = float(self.patrol_center[1] + self.patrol_scale[1] * math.sin(2.0 * t) * 0.75)
+            patrol_z = float(max(15.0, self.patrol_center[2] + self.patrol_scale[2] * math.sin(t * 1.5)))
 
-        self.patrol_time += dt * self.patrol_speed
-        t = self.patrol_time
-        patrol_x = float(self.patrol_center[0] + self.patrol_scale[0] * math.cos(t))
-        patrol_y = float(self.patrol_center[1] + self.patrol_scale[1] * math.sin(2.0 * t) * 0.75)
-        patrol_z = float(max(15.0, self.patrol_center[2] + self.patrol_scale[2] * math.sin(t * 1.5)))
+            # Update Commanded Target at GCS
+            self._target_pos = np.array([patrol_x, patrol_y, patrol_z], dtype=float)
 
-        # Update Commanded Target at GCS
-        self._target_pos = np.array([patrol_x, patrol_y, patrol_z], dtype=float)
+            should_update_uplink = True
+            if self.active_brain_name == "GOSSIP_CONSENSUS":
+                time_since_last = self.sim_time - self.last_gossip_inject_time
+                gossip_extra = self.brain.get_telemetry_extra()
+                consensus_reached = gossip_extra.get("consensus_reached", True)
+                if not consensus_reached and time_since_last < 2.5:
+                    should_update_uplink = False
+                elif time_since_last < 1.2:
+                    should_update_uplink = False
 
-        should_update_uplink = True
-        if self.active_brain_name == "GOSSIP_CONSENSUS":
-            time_since_last = self.sim_time - self.last_gossip_inject_time
-            gossip_extra = self.brain.get_telemetry_extra()
-            consensus_reached = gossip_extra.get("consensus_reached", True)
-            if not consensus_reached and time_since_last < 2.5:
-                should_update_uplink = False
-            elif time_since_last < 1.2:
-                should_update_uplink = False
+            if should_update_uplink:
+                res = self.dispatch_target_uplink(self._target_pos)
+                if self.active_brain_name == "GOSSIP_CONSENSUS" and res.get("status") == "OK":
+                    self.last_gossip_inject_time = self.sim_time
 
-        if should_update_uplink:
-            res = self.dispatch_target_uplink(self._target_pos)
-            if self.active_brain_name == "GOSSIP_CONSENSUS" and res.get("status") == "OK":
-                self.last_gossip_inject_time = self.sim_time
+        # 2. Tactical RNG Touch-and-Go Reconnaissance Generator (TKT-29)
+        elif self.rng_recon_active:
+            target_reached = self.is_target_reached()
+            if target_reached:
+                if not self.rng_dwelling:
+                    # Arrival detected: initiate tactical dwell / sensor scan countdown
+                    self.rng_dwelling = True
+                    self.rng_dwell_timer = self.rng_dwell_time
+                    self.rng_station_count += 1
+                else:
+                    self.rng_dwell_timer = max(0.0, self.rng_dwell_timer - dt)
+                    if self.rng_dwell_timer <= 0.0:
+                        # Dwell complete: compute new randomized, high-variance SAFE target
+                        new_target = self.generate_safe_rng_target()
+                        self._target_pos = np.copy(new_target)
+                        res = self.dispatch_target_uplink(new_target)
+                        if res.get("status") == "OK":
+                            self.rng_dwelling = False
+                            if self.active_brain_name == "GOSSIP_CONSENSUS":
+                                self.last_gossip_inject_time = self.sim_time
+            else:
+                self.rng_dwelling = False
 
     def step(self, dt: float = DT, advance_c2: bool = True) -> None:
         """Advance the physical simulation world by dt seconds."""
@@ -1582,11 +1623,14 @@ class SwarmSimulator:
         target_arr = np.array(pos, dtype=float)
         self._target_pos = target_arr
 
-        # Manual target dispatch disengages active mission route and auto-patrol
+        # Manual target dispatch disengages active mission route, auto-patrol, and RNG recon
         if self.route_active:
             self.route_active = False
             for d in self.drones:
                 d.mission_active = False
+        if self.rng_recon_active:
+            self.rng_recon_active = False
+            self.rng_dwelling = False
 
         # Dispatch across simulated uplink channel
         uplink_res = self.dispatch_target_uplink(self._target_pos)
@@ -1611,6 +1655,9 @@ class SwarmSimulator:
                 self.route_active = False
                 for d in self.drones:
                     d.mission_active = False
+            if self.rng_recon_active:
+                self.rng_recon_active = False
+                self.rng_dwelling = False
         return self.patrol_active
 
     def start_route_preset(self, preset_name: str) -> Dict[str, Any]:
@@ -1665,6 +1712,8 @@ class SwarmSimulator:
         self.route_waypoints = clean_wps
         self.route_loop = loop
         self.patrol_active = False  # Disable old continuous stream
+        self.rng_recon_active = False  # Disable RNG recon
+        self.rng_dwelling = False
 
         # Upload to drone OBC
         target_drone.mission_waypoints = [np.copy(wp) for wp in clean_wps]
@@ -1696,6 +1745,103 @@ class SwarmSimulator:
         if hasattr(self.brain, "route_active"):
             self.brain.route_active = False
         return {"status": "OK", "action": "ROUTE_STOPPED"}
+
+    # ==========================================================================
+    # 6c. Tactical RNG Touch-and-Go Reconnaissance Generator (TKT-29)
+    # ==========================================================================
+    def is_target_reached(self, threshold: float = 2.5) -> bool:
+        """Deterministic arrival check: whether the active swarm guidance
+        (flagship in star mode or centroid in gossip mode) has arrived within
+        the acceptance radius of the active acknowledged target."""
+        if self.active_brain_name == "GOSSIP_CONSENSUS":
+            active = [
+                d for d in self.drones
+                if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING")
+            ]
+            if not active:
+                return False
+            centroid = np.mean([d.pos for d in active], axis=0)
+            target = self.get_acknowledged_target()
+            return float(np.linalg.norm(centroid - target)) <= threshold
+        else:
+            current_leader = self.leader
+            if current_leader is None or current_leader.crashed:
+                return False
+            target = current_leader.acknowledged_target
+            return float(np.linalg.norm(current_leader.pos - target)) <= threshold
+
+    def generate_safe_rng_target(self) -> np.ndarray:
+        """Generate a high-variance, guaranteed-SAFE 3D target coordinate.
+        Bounded within operational geofence: X, Y in [-50, 70], Z in [10, 35].
+        Variance constraint: ||target_new - target_current|| >= 15.0m.
+        Safety clearance: Horizontal distance from tether anchor >= 3.0m."""
+        current_target = np.copy(self.get_acknowledged_target())
+        for _ in range(200):
+            rx = float(np.random.uniform(self.rng_geofence_min[0], self.rng_geofence_max[0]))
+            ry = float(np.random.uniform(self.rng_geofence_min[1], self.rng_geofence_max[1]))
+            rz = float(np.random.uniform(self.rng_geofence_min[2], self.rng_geofence_max[2]))
+            cand = np.array([rx, ry, rz], dtype=float)
+
+            # High variance: ensure jump distance >= 15m
+            if float(np.linalg.norm(cand - current_target)) < self.rng_min_variance:
+                continue
+
+            # Safe tether clearance: outside 3m cylinder around anchor
+            anchor_dist_xy = float(np.hypot(cand[0] - self.tether_anchor[0], cand[1] - self.tether_anchor[1]))
+            if anchor_dist_xy < self.rng_tether_clearance:
+                continue
+
+            return cand
+
+        # Deterministic safe offset fallback
+        dx = 20.0 if current_target[0] <= 10.0 else -20.0
+        dy = 20.0 if current_target[1] <= 10.0 else -20.0
+        dz = 25.0
+        return np.array([current_target[0] + dx, current_target[1] + dy, dz], dtype=float)
+
+    def toggle_rng_recon(self, active: Optional[bool] = None) -> bool:
+        """Toggle or explicitly set tactical RNG Touch-and-Go reconnaissance mode (TKT-29)."""
+        if active is not None:
+            self.rng_recon_active = bool(active)
+        else:
+            self.rng_recon_active = not self.rng_recon_active
+
+        if self.rng_recon_active:
+            # Cancel conflicting mission modes
+            self.patrol_active = False
+            self.stop_mission_route()
+            self.rng_dwelling = False
+            self.rng_dwell_timer = 0.0
+
+            # If swarm is already arrived at current target, initiate dwell
+            if self.is_target_reached():
+                self.rng_dwelling = True
+                self.rng_dwell_timer = self.rng_dwell_time
+                self.rng_station_count += 1
+        else:
+            self.rng_dwelling = False
+            self.rng_dwell_timer = 0.0
+
+        return self.rng_recon_active
+
+    def start_rng_recon(self) -> Dict[str, Any]:
+        """Activate RNG touch-and-go reconnaissance mode (TKT-29)."""
+        self.toggle_rng_recon(True)
+        return {
+            "status": "OK",
+            "action": "RNG_RECON_STARTED",
+            "station_count": self.rng_station_count,
+            "dwell_time": self.rng_dwell_time,
+        }
+
+    def stop_rng_recon(self) -> Dict[str, Any]:
+        """Deactivate RNG touch-and-go reconnaissance mode (TKT-29)."""
+        self.toggle_rng_recon(False)
+        return {
+            "status": "OK",
+            "action": "RNG_RECON_STOPPED",
+            "station_count": self.rng_station_count,
+        }
 
     # ==========================================================================
     # 7. Telemetry Snapshot Serialization
@@ -1745,8 +1891,16 @@ class SwarmSimulator:
             "target": [round(float(v), 2) for v in self.target_pos],
             "commanded_target": [round(float(v), 2) for v in self.target_pos],
             "acknowledged_target": [round(float(v), 2) for v in ack_target],
+            "target_reached": self.is_target_reached(),
             "mission_route": route_data,
             "patrol_active": self.patrol_active,
+            "rng_recon": {
+                "active": self.rng_recon_active,
+                "dwelling": self.rng_dwelling,
+                "dwell_timer": round(max(0.0, float(self.rng_dwell_timer)), 1),
+                "dwell_time": float(self.rng_dwell_time),
+                "station_count": int(self.rng_station_count),
+            },
             "two_ic_id": two_ic_id,
             "lost_link_loiter_timer": round(max(0.0, float(self.lost_link_loiter_timer)), 1),
             "swarm_rtb_active": self.swarm_rtb_active,

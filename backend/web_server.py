@@ -161,6 +161,17 @@ class SwarmWebServer:
             state = self.sim.toggle_target_patrol(active)
             return {"status": "OK", "cmd": cmd, "patrol_active": state}
 
+        elif cmd in ("TOGGLE_RNG_RECON", "TOGGLE_RNG", "RNG_RECON"):
+            active = cmd_dict.get("active", None)
+            state = self.sim.toggle_rng_recon(active)
+            return {"status": "OK", "cmd": cmd, "rng_recon_active": state}
+
+        elif cmd in ("START_RNG_RECON", "START_RNG"):
+            return self.sim.start_rng_recon()
+
+        elif cmd in ("STOP_RNG_RECON", "STOP_RNG"):
+            return self.sim.stop_rng_recon()
+
         elif cmd in ("START_ROUTE_PRESET", "SET_ROUTE_PRESET"):
             preset = cmd_dict.get("preset", cmd_dict.get("name", "BOX_PATROL"))
             res = self.sim.start_route_preset(preset)

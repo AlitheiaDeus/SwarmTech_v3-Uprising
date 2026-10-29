@@ -831,6 +831,35 @@ html, body {
   100% { box-shadow: 0 0 16px rgba(0, 255, 170, 0.8); }
 }
 
+.btn-rng {
+  border-color: rgba(255, 170, 0, 0.45);
+  color: #FFAA00;
+  background: rgba(255, 170, 0, 0.08);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+}
+
+.btn-rng:hover {
+  background: rgba(255, 170, 0, 0.22);
+  border-color: #FFFFFF;
+  color: #FFFFFF;
+  box-shadow: 0 0 12px rgba(255, 170, 0, 0.5);
+}
+
+.btn-rng.active-rng {
+  background: rgba(255, 170, 0, 0.25);
+  border-color: #FFAA00;
+  color: #FFFFFF;
+  box-shadow: 0 0 14px rgba(255, 170, 0, 0.6);
+  animation: pulse-rng 1.5s infinite alternate;
+}
+
+@keyframes pulse-rng {
+  0% { box-shadow: 0 0 8px rgba(255, 170, 0, 0.4); }
+  100% { box-shadow: 0 0 16px rgba(255, 170, 0, 0.8); }
+}
+
 .route-header-row {
   display: flex;
   justify-content: space-between;

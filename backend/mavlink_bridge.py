@@ -60,6 +60,7 @@ class MavlinkBridge:
 
         self.last_mavlink_heartbeat: float = -1.0
         self.last_mavlink_pos: float = -1.0
+        self.last_reached_sent: bool = False
         self.packet_count: int = 0
         self.commands_processed: int = 0
 
@@ -136,6 +137,17 @@ class MavlinkBridge:
             active = cmd_dict.get("active", None)
             state = self.sim.toggle_target_patrol(active)
             return {"status": "OK", "cmd": cmd, "patrol_active": state}
+
+        elif cmd in ("TOGGLE_RNG_RECON", "TOGGLE_RNG", "RNG_RECON"):
+            active = cmd_dict.get("active", None)
+            state = self.sim.toggle_rng_recon(active)
+            return {"status": "OK", "cmd": cmd, "rng_recon_active": state}
+
+        elif cmd in ("START_RNG_RECON", "START_RNG"):
+            return self.sim.start_rng_recon()
+
+        elif cmd in ("STOP_RNG_RECON", "STOP_RNG"):
+            return self.sim.stop_rng_recon()
 
         elif cmd in ("SET_COMMS_MODE", "SET_MODE"):
             mode = cmd_dict.get("mode", "TETHERED_RELAY")
@@ -339,6 +351,18 @@ class MavlinkBridge:
             )
             pkt_pos = msg_pos.pack(self.mav)
             bytes_sent += self.mavlink_sock.sendto(pkt_pos, (self.host, self.mavlink_port))
+
+        # 3. MISSION_ITEM_REACHED (#46) when active target reached
+        target_reached = self.sim.is_target_reached()
+        if target_reached and not self.last_reached_sent:
+            self.last_reached_sent = True
+            if hasattr(self.mav, "mission_item_reached_encode"):
+                seq = getattr(self.sim, "rng_station_count", 0)
+                msg_reach = self.mav.mission_item_reached_encode(seq=seq)
+                pkt_reach = msg_reach.pack(self.mav)
+                bytes_sent += self.mavlink_sock.sendto(pkt_reach, (self.host, self.mavlink_port))
+        elif not target_reached:
+            self.last_reached_sent = False
 
         return bytes_sent
 

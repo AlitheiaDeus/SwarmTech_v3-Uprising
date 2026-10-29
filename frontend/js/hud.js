@@ -106,6 +106,12 @@
             window.swarmClient?.send({ cmd: 'TOGGLE_PATROL' });
         });
 
+        // Tactical RNG Touch-and-Go Reconnaissance (TKT-29)
+        setupBtn('btn-toggle-rng', () => {
+            logEvent('CMD', 'Toggling Tactical RNG Touch-and-Go Reconnaissance: TOGGLE_RNG_RECON');
+            window.swarmClient?.send({ cmd: 'TOGGLE_RNG_RECON' });
+        });
+
         // Custom Target Coordinates
         const btnDispatchCustom = document.getElementById('btn-dispatch-custom');
         if (btnDispatchCustom) {
@@ -239,6 +245,11 @@
         if (btnPatrol) {
             btnPatrol.classList.remove('active-patrol');
             btnPatrol.innerHTML = '&#x221E; AUTO PATROL LOOP';
+        }
+        const btnRng = document.getElementById('btn-toggle-rng');
+        if (btnRng) {
+            btnRng.classList.remove('active-rng');
+            btnRng.innerHTML = '&#x1F3B2; RNG RECON';
         }
         logEvent('CMD', `Dispatching Target [${label}] -> (${pos[0]}, ${pos[1]}, ${pos[2]})`);
         window.swarmClient?.send({ cmd: 'SET_TARGET', pos: pos });
@@ -380,6 +391,33 @@
             if (btnRouteBox) btnRouteBox.classList.remove('active-route');
             if (btnRouteDiamond) btnRouteDiamond.classList.remove('active-route');
             if (btnRouteHexagon) btnRouteHexagon.classList.remove('active-route');
+        }
+
+        // 4b3. Monitor Tactical RNG Reconnaissance State (TKT-29)
+        const rngData = frame.rng_recon;
+        const btnRng = document.getElementById('btn-toggle-rng');
+        if (rngData && rngData.active) {
+            if (btnRng) {
+                btnRng.classList.add('active-rng');
+                if (rngData.dwelling) {
+                    btnRng.innerHTML = `&#x1F3B2; DWELL (${Number(rngData.dwell_timer || 0).toFixed(1)}s)`;
+                } else {
+                    btnRng.innerHTML = `&#x1F3B2; STATION #${rngData.station_count || 0}`;
+                }
+            }
+            if (routeActiveBadge && (!routeData || !routeData.active)) {
+                routeActiveBadge.className = 'badge-route-active';
+                if (rngData.dwelling) {
+                    routeActiveBadge.textContent = `RNG [DWELL ${Number(rngData.dwell_timer || 0).toFixed(1)}s]`;
+                } else {
+                    routeActiveBadge.textContent = `RNG [STATION #${rngData.station_count || 0}]`;
+                }
+            }
+        } else {
+            if (btnRng) {
+                btnRng.classList.remove('active-rng');
+                btnRng.innerHTML = '&#x1F3B2; RNG RECON';
+            }
         }
 
         // 4c. Monitor Tactical Recovery & Soft-Landing (TKT-19)
