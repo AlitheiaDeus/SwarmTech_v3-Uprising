@@ -156,6 +156,13 @@ html, body {
   animation: pulse-border-cyan 1.2s infinite alternate;
 }
 
+.failsafe-pill.failsafe-untethered {
+  border-color: var(--neon-emerald);
+  color: var(--neon-emerald);
+  background: rgba(0, 255, 170, 0.12);
+  animation: none;
+}
+
 .failsafe-pulse {
   width: 8px;
   height: 8px;
@@ -169,6 +176,11 @@ html, body {
 .failsafe-rtb .failsafe-pulse {
   background: var(--neon-cyan);
   box-shadow: 0 0 8px var(--neon-cyan);
+}
+
+.failsafe-untethered .failsafe-pulse {
+  background: var(--neon-emerald);
+  box-shadow: 0 0 8px var(--neon-emerald);
 }
 
 @keyframes pulse-border {

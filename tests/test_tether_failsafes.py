@@ -170,6 +170,31 @@ class TestTetherFailsafes(unittest.TestCase):
         # Drone 0's X position should be behind leader (flying back to base)
         self.assertLess(d0.pos[0], d1.pos[0])
 
+    def test_cancel_rtb_normalizes_untethered_cruise(self):
+        """Cancelling RTB post-severance normalizes comms_mode to LEADER_FOLLOWER and flight_state to CRUISE."""
+        sim = SwarmSimulator(drone_count=6)
+        sim.cut_tether()
+        self.assertTrue(sim.tether_severed)
+        self.assertEqual(sim.comms_mode, "TETHERED_RELAY")
+
+        # Step until 30s loiter grace period expires and RTB engages
+        for _ in range(1850):
+            sim.step()
+
+        self.assertTrue(sim.swarm_rtb_active)
+
+        # Operator cancels RTB
+        sim.cancel_rtb()
+        self.assertFalse(sim.swarm_rtb_active)
+        self.assertEqual(sim.recovery_stage, "IDLE")
+        self.assertEqual(sim.lost_link_loiter_timer, 0.0)
+        # Comms mode must now be normalized to untethered LEADER_FOLLOWER
+        self.assertEqual(sim.comms_mode, "LEADER_FOLLOWER")
+        # Living drones must be returned to CRUISE
+        for d in sim.drones:
+            if not d.crashed:
+                self.assertEqual(d.flight_state, "CRUISE")
+
 
 if __name__ == "__main__":
     unittest.main()

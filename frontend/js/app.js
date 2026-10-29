@@ -210,8 +210,8 @@
         diamond.name = 'diamond';
         targetBeacon.add(diamond);
 
-        // 2. Vertical laser beam to ground
-        const beamGeom = new THREE.CylinderGeometry(0.08, 0.08, 60, 8);
+        // 2. Vertical laser beam to ground (FIX-01: unit length, dynamically scaled to ground Z=0)
+        const beamGeom = new THREE.CylinderGeometry(0.08, 0.08, 1.0, 8);
         beamGeom.rotateX(Math.PI / 2);
         const beamMat = new THREE.MeshBasicMaterial({
             color: COLORS.target,
@@ -219,7 +219,9 @@
             opacity: 0.35,
         });
         const beam = new THREE.Mesh(beamGeom, beamMat);
-        beam.position.set(0, 0, -30);
+        beam.name = 'beam';
+        beam.scale.set(1, 1, 30);
+        beam.position.set(0, 0, -15);
         targetBeacon.add(beam);
 
         // 3. Ground pulse ring
@@ -1055,10 +1057,18 @@
             }
         }
 
-        // 2. Animate Target Waypoint Beacon
+        // 2. Animate Target Waypoint Beacon (FIX-01: dynamic ground clamp)
         if (targetBeacon) {
             const diamond = targetBeacon.getObjectByName('diamond');
             if (diamond) diamond.rotation.z += 0.02;
+
+            const targetZ = Math.max(0.01, targetBeacon.position.z);
+            const beam = targetBeacon.getObjectByName('beam');
+            if (beam) {
+                beam.scale.set(1, 1, targetZ);
+                beam.position.set(0, 0, -targetZ / 2);
+            }
+
             const ring = targetBeacon.getObjectByName('ring');
             if (ring) {
                 const scale = 1.0 + 0.15 * Math.sin(performance.now() * 0.005);

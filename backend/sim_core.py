@@ -1148,9 +1148,12 @@ class SwarmSimulator:
         """Cancel RTB / overhead marshaling and return living airborne drones to mission cruise."""
         self.overhead_marshal_active = False
         self.swarm_rtb_active = False
+        self.lost_link_loiter_timer = 0.0
         self.recovery_stage = "IDLE"
+        if self.tether_severed and self.comms_mode == "TETHERED_RELAY":
+            self.comms_mode = "LEADER_FOLLOWER"
         for drone in self.drones:
-            if not drone.crashed and drone.flight_state == "OVERHEAD_HOLD":
+            if not drone.crashed and drone.flight_state in ("OVERHEAD_HOLD", "DESCENDING"):
                 drone.flight_state = "CRUISE"
                 drone.status = "FLEET_LEADER" if drone.is_leader else "ACTIVE"
 
@@ -1388,7 +1391,7 @@ class SwarmSimulator:
         self.target_pos = target_arr
         # If user explicitly dispatches a new target away from base anchor, disengage RTB marshal
         if not np.allclose(self.target_pos, [0.0, 0.0, 25.0], atol=1.0):
-            if self.overhead_marshal_active:
+            if self.overhead_marshal_active or self.swarm_rtb_active:
                 self.cancel_rtb()
 
         if isinstance(brain_res, dict):

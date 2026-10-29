@@ -347,13 +347,16 @@
             }
         }
 
-        // 4d. Update Top Bar Failsafe Indicator (TKT-16)
+        // 4d. Update Top Bar Failsafe Indicator (TKT-16, FIX-02)
         const failsafePill = document.getElementById('hud-failsafe-pill');
         const failsafeText = document.getElementById('hud-failsafe-text');
         if (failsafePill && failsafeText) {
             if (frame.tether && frame.tether.severed) {
                 failsafePill.classList.remove('hidden');
-                if (frame.swarm_rtb_active) {
+                if (frame.recovery_stage === 'LANDING' || frame.recovery_stage === 'COMPLETE') {
+                    failsafePill.className = 'status-pill failsafe-pill failsafe-rtb';
+                    failsafeText.textContent = 'TACTICAL RECOVERY: COORD SOFT-LANDING ACTIVE';
+                } else if (frame.swarm_rtb_active) {
                     failsafePill.className = 'status-pill failsafe-pill failsafe-rtb';
                     failsafeText.textContent = 'UPLINK LOST: DOCTRINE A SWARM RTB TO BASE ACTIVE';
                 } else if (frame.lost_link_loiter_timer !== undefined && frame.lost_link_loiter_timer > 0) {
@@ -361,8 +364,8 @@
                     const leaderTwoIc = frame.two_ic_id !== null && frame.two_ic_id !== undefined ? frame.two_ic_id : 1;
                     failsafeText.textContent = `UPLINK SEVERED: 2IC #${leaderTwoIc} IN COMMAND | DOCTRINE A LOITER: ${frame.lost_link_loiter_timer.toFixed(1)}s -> RTB`;
                 } else {
-                    failsafePill.className = 'status-pill failsafe-pill failsafe-rtb';
-                    failsafeText.textContent = 'UPLINK SEVERED: RETURNING TO BASE';
+                    failsafePill.className = 'status-pill failsafe-pill failsafe-untethered';
+                    failsafeText.textContent = 'UNTETHERED CRUISE (MISSION RESUMED)';
                 }
             } else {
                 failsafePill.classList.add('hidden');
