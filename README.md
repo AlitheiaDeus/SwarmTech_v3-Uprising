@@ -1,4 +1,4 @@
-# SwarmTech_v3: UpRising
+# AlitheiaHive: v3-Uprising
 
 <p align="center">
   <strong>Autonomous Drone Swarm Simulator & Hardware-Accelerated 3D WebGL Tactical GCS</strong><br>
@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/tactical_gcs_hero.png" alt="SwarmTech3 Tactical Ground Control Station (GCS) Viewport" width="100%">
+  <img src="docs/images/tactical_gcs_hero.png" alt="AlitheiaHive Tactical Ground Control Station (GCS) Viewport" width="100%">
 </p>
 
 ---
@@ -24,7 +24,7 @@
 
 Previous desktop swarm simulators suffered from frame drops, sluggish UI freezing, and cross-contamination between user interface inputs and physical simulation memory.
 
-**`SwarmTech_v3-Uprising`** solves this by strictly enforcing a **50/50 Architecture** across **4 Explicit Airgaps**:
+**`AlitheiaHive_v3-Uprising`** solves this by strictly enforcing a **50/50 Architecture** across **4 Explicit Airgaps**:
 1. **The Operator Airgap (Tactical GCS Terminal)**: Renders only downlinked telemetry packets (`TELEMETRY_FRAME`). Emits flight intents. Never alters ground truth physics directly.
 2. **The Canyon Airgap (Packet Network Link)**: The physical and electromagnetic void between ground station and fleet. Only serialized packets (UDP 9000/9001, MAVLink UDP 14550, or WebSocket JSON) cross this boundary.
 3. **The Brain Airgap (Isolated Drone OBC Fleet)**: Each airframe runs an isolated Onboard Computer (OBC) bubble. Drones steer only to authenticated local target buffers, maintaining autonomous failsafes (Doctrine A loiter, automated breakaway dive, RTB soft landing) on comms loss.
@@ -133,7 +133,7 @@ python -m unittest discover tests
 ```
 
 ```text
-Ran 96 tests in 0.512s
+Ran 108 tests in 0.485s
 
 OK
 ```
@@ -143,34 +143,27 @@ OK
 ## 5. Repository Topology
 
 ```
-SwarmTech_v3-Uprising/
+AlitheiaHive_v3-Uprising/
 ├── README.md                       # Master documentation & technical guide
 ├── AGENTS.md                       # Architectural landmark & design invariant guide
 ├── SWARM_UPRISING_SPEC.md          # Complete mathematical & architectural specification
 ├── kanban.md                       # Strict single-WIP project lifecycle board
 ├── kanban_scope.md                 # Deep technical scoping for candidate tickets
 ├── kanban_archive.md               # Settled milestone history
-├── run.py                          # Unified backend launcher, browser opener & smoke test runner
+├── REFORMATION_PLAN.md             # 3-bubble decoupling and session handoff blueprint
+├── run_with_sim.py                 # Top-layer multi-process orchestrator
+├── run.py                          # Unified backward-compatible runner
 ├── run.ps1                         # Zero-config PowerShell launcher with DLL path injection
-├── backend/                        # Python Simulation & Networking Backend
-│   ├── __init__.py                 # Self-healing Conda DLL and sys.path bootstrap
-│   ├── sim_core.py                 # Vectorized 60 FPS boids, 4-zone safety, tether, LKP
-│   ├── mavlink_bridge.py           # UDP ports 9000, 9001, and 14550 MAVLink loopback
-│   ├── web_server.py               # aiohttp static web server & 60 FPS WebSocket streamer
-│   └── brains/                     # Pluggable Guidance Brain Modules
-│       ├── __init__.py             # Brain registry and factory
-│       ├── base.py                 # BaseBrain plugin interface
-│       ├── leader_follower.py      # Tethered leader-follower with LKP recovery
-│       └── gossip_consensus.py     # Decentralized P2P mesh with quorum consensus
-├── frontend/                       # Three.js WebGL Tactical GCS
-│   ├── index.html                  # GCS entry point & layout
-│   ├── css/
-│   │   └── style.css               # Cyberpunk dark navy (#061019) & neon HUD styling
-│   └── js/
-│       ├── app.js                  # Three.js 3D scene, quadcopters, drop-lines, camera
-│       ├── hud.js                  # Telemetry cards, mission dispatch, casualty lab
-│       └── ws_client.js            # Duplex WebSocket state synchronization client
-└── tests/                          # Automated unit test suite (96 tests)
+├── GCS/                            # Bubble 1: Ground Control Station (The Operator Airgap)
+│   ├── backend/                    # C2 mission gateway, routes, RNG recon, web server
+│   └── frontend/                   # Operator WebGL tactical 3D viewport (Three.js / Cyberpunk HUD)
+├── OBC/                            # Bubble 2: Onboard Computer Fleet (The Brain Airgap)
+│   ├── backend/                    # Drone OBC firmware, pluggable brains, local estimators
+│   └── frontend/                   # (Staged / Late-game: OBC diagnostics & telemetry log viewer)
+├── SIM/                            # Bubble 3: SITL World Simulator (The God-View / Sim Airgap)
+│   ├── backend/                    # Kinematic FC twin, 4-zone safety, tether dynamics, RF channel, casualty lab
+│   └── frontend/                   # (God-view omniscient truth viewport & debug overlay)
+└── tests/                          # Automated unit test suite (108 tests)
     ├── __init__.py
     ├── test_sim_core.py            # Physics, 4-zone avoidance, tether snap, LKP tests
     ├── test_brains.py              # Brain plugins, P2P gossip wave, quorum tests
@@ -183,7 +176,8 @@ SwarmTech_v3-Uprising/
     ├── test_gossip_formations.py   # Decentralized geometric swarm patterns
     ├── test_c2_decoupling.py       # Ground truth vs autopilot decoupling
     ├── test_mission_routes.py      # Discrete waypoint mission queues (TKT-28)
-    └── test_rng_recon.py           # Tactical RNG touch-and-go generator (TKT-29)
+    ├── test_rng_recon.py           # Tactical RNG touch-and-go generator (TKT-29)
+    └── test_session_hydration.py   # Persistent telemetry session hydration (TKT-32)
 ```
 
 ---

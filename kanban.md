@@ -1,4 +1,4 @@
-# SwarmTech3_UpRising: Project Kanban Board
+# AlitheiaHive_v3-Uprising: Project Kanban Board
 
 > **Tactical GCS Workflow & Task Lifecycle** | **Palette: Dark Navy (#061019) & Neon Cyan (#00F0FF)**  
 > *50/50 Architecture: Pure Python Kinematics & GPU-Native Three.js Rendering across 4 Airgaps*

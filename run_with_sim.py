@@ -1,5 +1,5 @@
 """
-SwarmTech3_UpRising: Top-Layer Multi-Process Orchestrator (run_with_sim.py)
+AlitheiaHive_v3-Uprising: Top-Layer Multi-Process Orchestrator (run_with_sim.py)
 Bubble Orchestration across 4 Strict Airgaps:
   1. Bubble 3 (SIM): SITL World Engine daemon (kinematics, 4-zone safety, tether, RF channel, UDP 9000/9001/14550)
   2. Bubble 2 (OBC): Drone Fleet OBCs (isolated target mailbox, autonomous failsafes)
@@ -263,7 +263,7 @@ def run_sim_only(args: argparse.Namespace) -> int:
 async def run_gcs_only(args: argparse.Namespace) -> int:
     """Run Tactical GCS C2 Gateway & Web Server without local physics."""
     print("=" * 64)
-    print("  SWARMTECH-3 // TACTICAL GCS OPERATOR TERMINAL")
+    print("  ALITHEIA HIVE // TACTICAL GCS OPERATOR TERMINAL")
     print(f"  Web Server: http://{args.host}:{args.port}")
     print(f"  Listening for Telemetry: UDP {args.tx_port}")
     print(f"  Emitting Operator Commands: UDP {args.rx_port}")
@@ -385,7 +385,7 @@ def run_multi_process(args: argparse.Namespace) -> int:
 async def run_unified_interactive(args: argparse.Namespace) -> int:
     """Interactive production mode: launches backend simulation and opens browser."""
     print("=" * 64)
-    print("  SWARMTECH-3: UPRISING // 3-BUBBLE ARCHITECTURE")
+    print("  ALITHEIA HIVE: v3-UPRISING // 3-BUBBLE ARCHITECTURE")
     print("  Bubble 1: GCS Tactical Viewport & C2 Gateway")
     print("  Bubble 2: Autonomous Fleet OBCs (8 Agents)")
     print("  Bubble 3: SITL World Engine & MAVLink Loopback")
@@ -428,7 +428,7 @@ async def run_unified_interactive(args: argparse.Namespace) -> int:
     finally:
         print("[*] Gracefully stopping WebGL server and network bridges...")
         await server.stop()
-        print("[*] SwarmTech3 shutdown complete. Fly safe.\n")
+        print("[*] AlitheiaHive shutdown complete. Fly safe.\n")
     return 0
 
 

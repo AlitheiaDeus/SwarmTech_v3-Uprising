@@ -1,5 +1,5 @@
 """
-SwarmTech3_UpRising: Unified Master Launcher (run.py)
+AlitheiaHive_v3-Uprising: Unified Master Launcher (run.py)
 Delegates execution to run_with_sim.py multi-process orchestrator.
 """
 
