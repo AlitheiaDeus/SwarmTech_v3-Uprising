@@ -2,66 +2,90 @@
 
 <p align="center">
   <strong>Autonomous Drone Swarm Simulator & Hardware-Accelerated 3D WebGL Tactical GCS</strong><br>
-  <em>Built on a high-performance 50/50 Architecture: Pure Python Vectorized Kinematics & GPU-Native Three.js Rendering.</em>
+  <em>Built on a high-performance 50/50 Architecture across 4 Strict Airgaps: Pure Python Kinematics & GPU-Native Three.js Rendering.</em>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white" alt="Python 3.12">
   <img src="https://img.shields.io/badge/WebGL-Three.js_r128-00F0FF?logo=three.js&logoColor=white" alt="Three.js">
-  <img src="https://img.shields.io/badge/Architecture-50%2F50_Decoupled-00FFAA" alt="50/50 Decoupled">
-  <img src="https://img.shields.io/badge/Physics-60_FPS_Vectorized-FFB800" alt="60 FPS">
-  <img src="https://img.shields.io/badge/Tests-26%2F26_Passing-brightgreen" alt="Tests 26/26 Passing">
+  <img src="https://img.shields.io/badge/Architecture-4--Airgap_Decoupled-00FFAA" alt="4-Airgap Decoupled">
+  <img src="https://img.shields.io/badge/Physics-60_FPS_Kinematic_Twin-FFB800" alt="60 FPS">
+  <img src="https://img.shields.io/badge/Tests-96%2F96_Passing-brightgreen" alt="Tests 96/96 Passing">
   <img src="https://img.shields.io/badge/License-MIT-gray" alt="MIT License">
 </p>
 
 ---
 
-## 1. System Mission & The 50/50 Architecture
+## 1. System Mission & The 4 Airgaps
 
-Previous desktop swarm simulators suffered from severe frame drops, sluggish UI thread freezing, and inaccurate CPU software projections (e.g. `QPainter` 3D projection math). 
+Previous desktop swarm simulators suffered from frame drops, sluggish UI freezing, and cross-contamination between user interface inputs and physical simulation memory.
 
-**`SwarmTech_v3-Uprising`** solves this by strictly enforcing a **50/50 Architecture**:
-* **Backend (Python 3.12 / NumPy / aiohttp)**: High-performance vectorized 60 FPS Reynolds boid kinematics, sane physical safety zones, realistic 10 Hz radio comms with Last Known Position (LKP) recovery, catenary tether dynamics, and non-blocking UDP/MAVLink loopback.
-* **Frontend (Three.js / WebGL / Vanilla CSS)**: Hardware-accelerated 3D viewport running 100% on the GPU. Cyberpunk tactical HUD with live in-place telemetry cards, formation hot-switching, 3D ground-click target dispatch, and casualty simulation controls.
-
-> **Invariable Rule**: Guidance intelligence, physical bounds, and networking remain in Python; 3D rendering and operator interaction run in WebGL on the GPU. Neither side leaks into the other.
+**`SwarmTech_v3-Uprising`** solves this by strictly enforcing a **50/50 Architecture** across **4 Explicit Airgaps**:
+1. **The Operator Airgap (Tactical GCS Terminal)**: Renders only downlinked telemetry packets (`TELEMETRY_FRAME`). Emits flight intents. Never alters ground truth physics directly.
+2. **The Canyon Airgap (Packet Network Link)**: The physical and electromagnetic void between ground station and fleet. Only serialized packets (UDP 9000/9001, MAVLink UDP 14550, or WebSocket JSON) cross this boundary.
+3. **The Brain Airgap (Isolated Drone OBC Fleet)**: Each airframe runs an isolated Onboard Computer (OBC) bubble. Drones steer only to authenticated local target buffers, maintaining autonomous failsafes (Doctrine A loiter, automated breakaway dive, RTB soft landing) on comms loss.
+4. **The God-View / Sim Airgap (SITL World Simulator & Test Harness)**: Ground truth physics engine running an **ideal Flight Controller (FC) digital twin** (60 FPS kinematics, velocity clamps, yaw slew rate limiting, tilt angle coupling). Strictly separates operator flight commands from simulation fault injections.
 
 ---
 
 ## 2. Key Capabilities & Technical Features
 
 ### Sane 4-Zone Spatial Safety (No "Truck-Sized" Bubbles)
-Replaces over-engineered 15m clash radii and force spikes with true-to-scale physics:
-* **Physical Airframe**: $R_{\text{body}} = 0.75\text{m}$ (Wingspan $= 1.5\text{m}$).
-* **Zone 1 ($d > 8.0\text{m}$)**: Nominal flight toward formation slots or waypoints.
-* **Zone 2 ($3.5\text{m} < d \le 8.0\text{m}$)**: Smooth linear separation steering.
+True-to-scale physics with metric dimensions:
+* **Airframe Scale**: $R_{\text{body}} = 0.75\text{m}$ (Wingspan $= 1.5\text{m}$).
+* **Zone 1 ($d > 8.0\text{m}$)**: Nominal flight toward formation slots or waypoints. Zero repulsion.
+* **Zone 2 ($3.5\text{m} < d \le 8.0\text{m}$)**: Smooth linear separation steering effort.
 * **Zone 3 ($1.5\text{m} < d \le 3.5\text{m}$)**: **Active Relative-Velocity Damping** brakes incoming momentum and prevents discrete pinball penetration:
   $$\mathbf{a}_{\text{evade}} = \left[ 12.0 + 8.0 \cdot \left(\frac{3.5 - d_{ij}}{3.5 - 1.5}\right) \right] \hat{\mathbf{n}}_{ij} - 1.5 (\mathbf{v}_i - \mathbf{v}_j)_{\parallel}$$
-* **Zone 4 ($d \le 1.5\text{m}$)**: Prop clash occurs. Motors disengage (`crashed = True`) and airframe enters ballistic gravity drop ($g = -9.81\text{m/s}^2$).
+* **Zone 4 ($d \le 1.5\text{m}$)**: Prop clash threshold. Motors cut (`crashed = True`), airframe enters ballistic gravity drop ($g = -9.81\text{m/s}^2$).
+
+### Ideal Flight Controller (FC) Kinematic Digital Twin
+Bypasses the CPU bloat and numerical instability of non-linear blade element aerodynamics in favor of an ideal, deterministic FC twin:
+* **Velocity & Acceleration Clamps**: $v_{\text{cruise}} = 12.0\text{ m/s}$, $v_{\text{max}} = 20.0\text{ m/s}$, $a_{\text{max}} = 15.0\text{ m/s}^2$.
+* **Attitude Tilt Coupling**: $\tan\theta = a_x/g$, $\tan\phi = a_y/g$, with angular slew rate limit $|\dot{\theta}|, |\dot{\phi}| \le 250^\circ/\text{s}$.
+* **Yaw Slew Rate Limiting**: Maximum turning rate $\le 45^\circ/\text{s}$ with arrival deadbands ($0.25\text{m}$).
 
 ### Pluggable Guidance Brains (Centralized & Decentralized)
-* **`LeaderFollowerBrain`**: Star topology where tethered leader transmits heartbeats and followers hold staggered formation slots.
-* **`GossipConsensusBrain`**: Fully decentralized P2P mesh network. Target waypoints propagate via multi-hop gossip echo waves until a $75\%$ quorum consensus barrier is achieved, prompting simultaneous swarm maneuver.
+* **`LeaderFollowerBrain`**: Star topology where flagship transmits heartbeats and followers hold staggered formation slots.
+* **`GossipConsensusBrain`**: Fully decentralized leaderless P2P mesh network. Target waypoints propagate via multi-hop gossip echo waves until a $75\%$ quorum consensus barrier is achieved, prompting simultaneous swarm maneuver.
 * Hot-swappable at runtime with zero physics hitching.
 
-### Realistic Radio Comms ("Baud") & LKP Failover
-* Leader broadcasts state packets at $10\text{ Hz}$ with a $120\text{m}$ Euclidean radio range.
-* Drones that lose heartbeats for $> 1.0\text{s}$ enter `LOST_LINK` and autonomously seek their **Last Known Position (LKP)** at conservative cruise speed until rejoining the fleet.
+### Discrete Waypoint Mission Queue (TKT-28)
+* Lightweight discrete 3D/4D waypoint lists (`[x, y, z, loiter_s]`) deployed via atomic `UPLOAD_MISSION_ROUTE` packets.
+* Presets: `BOX_PATROL`, `DIAMOND_SURVEY`, `HEXAGON_SWEEP`.
+* Fleet OBC stores waypoint queues and advances upon reaching acceptance radius $R_{\text{accept}} = 2.5\text{m}$.
+* Three.js renders dynamic connected 3D neon polyline ribbons.
 
-### Catenary Tether Dynamics & Autonomic Succession
-* GCS mast anchor at $(0, 0, 1.5)$ connects to the active leader via a dynamic 16-point catenary curve calculating gravitational sag.
-* Followers maintain a $3.0\text{m}$ clearance envelope. Physical contact ($d_{\perp} \le 1.0\text{m}$) snaps the cable, cuts leader power, and triggers immediate **autonomic leadership succession** based on tier priority.
+### Tactical RNG Touch-and-Go Reconnaissance (TKT-29)
+* **Deterministic Handshake**: Fleet emits `target_reached = True` (MAVLink `MISSION_ITEM_REACHED`) ping upon arrival.
+* **Telemetry-Gated Dwell**: GCS executes 2.0s tactical sensor dwell, then rolls high-variance SAFE coordinates ($\Delta d \ge 15.0\text{m}$) outside the 3m tether cylinder.
+* **Uplink Failure Hold**: GCS freezes beacon and halts re-rolls when link drops.
+
+### Tri-Mode Comms Architecture & Contested RF Simulation (TKT-17)
+* **`TETHERED_RELAY`**: Hardline umbilical to Drone #0; immune to GCS uplink jamming; 3m clearance cylinder enforced.
+* **`LEADER_FOLLOWER`**: Untethered wireless star; subject to $120\text{m}$ GCS radio range and EW jamming.
+* **`GOSSIP_CONSENSUS`**: Untethered decentralized P2P mesh; multi-hop gossip wave with quorum consensus.
+* **RF Physics**: Quadratic path loss $P_{\text{loss}}(d) = \gamma + (1-\gamma) \cdot 0.25 \cdot (d/R_{\text{max}})^2$ with operator EW jamming slider ($\gamma \in [0.0, 0.5]$).
+
+### Catenary Tether Dynamics, Breakaway Dive & Succession (TKT-16 / TKT-27)
+* Real-time 16-point catenary curve calculating gravitational sag from anchor $(0, 0, 1.5\text{m})$.
+* **Altitude-Gated Breakaway**: On cable snip, Drone #0 performs an altitude-gated breakaway dive ($\Delta Z \ge 4.0\text{m}$, lateral peel $6.0\text{ m/s}$), jettisons umbilical over 1.5s GPU dissolve, and climbs smoothly to rejoin wing escort slot with zero prop clashes.
+* **Fleet Doctrine A**: Promoted 2IC holds 30s defensive loiter before executing automated `SWARM_RTB`.
+
+### 2-Stage Soft Landing & Coordinated ATC Pad Allocation (TKT-19)
+* **Stage 1 (`OVERHEAD_MARSHAL`)**: Sentry ring at $Z = 25\text{m}$, $R = 20\text{m}$ outside the 3m tether cylinder.
+* **Stage 2 (`AUTHORIZED_LAND`)**: ATC pad allocation with 2.0s clearance stagger intervals, 2-stage vertical deceleration ($-1.5\text{ m/s} \rightarrow -0.5\text{ m/s}$), and touchdown disarm (0 RPM, ground-locked).
+
+### GPU-Native WebGL Tactical GCS & Dual-Target C2 (TKT-26)
+* **Commanded Target (Hollow Cyan Diamond)**: Tracks operator mouse clicks, waypoint presets, and continuous Fig-8 patrol route in real time.
+* **Swarm Acknowledged Target (Solid Emerald Diamond)**: Tracks actual waypoint confirmed in active OBC memory.
+* **Visual Divergence**: When uplink is severed or jammed, Commanded marker moves away while Swarm Acknowledged marker remains frozen at the Doctrine A loiter point.
+* **HUD Features**: 3D billboard tactical ID badges, dynamic rotor spin and color changes, click-to-focus chase cam, and HTML5 Gamepad API override (RadioMaster / EdgeTX).
 
 ### UDP Network Bridge & MAVLink Loopback
 * **Port 9000 (TX)**: Non-blocking UDP broadcast of swarm telemetry JSON array.
-* **Port 9001 (RX)**: External UDP command ingestion.
+* **Port 9001 (RX)**: External UDP command listener.
 * **Port 14550 (MAVLink v2 Loopback)**: Emits binary MAVLink `HEARTBEAT` and `GLOBAL_POSITION_INT` messages with GPS projection for integration with QGroundControl and SITL tools.
-
-### GPU-Native WebGL Tactical GCS
-* **True 3D Geometry**: Detailed quadcopter airframes with spinning rotor discs, carbon arms, and orientation LEDs.
-* **Spatial Depth**: Concentric perspective range rings ($25\text{m}, 50\text{m}, 100\text{m}$) and 3D dashed altitude drop-lines projecting to $(X, Y, 0)$ ground reticles.
-* **Ground-Click Dispatch**: Left-click anywhere on the 3D ground grid to dispatch a target waypoint with an expanding pulse ripple animation.
-* **Interactive Command Deck**: In-place telemetry cards (ID, altitude, speed, battery gauge), formation switcher (*Echelon*, *Boids*, *Vortex*, *Patrol*), and a Casualty Lab (*Kill Leader*, *Cut Tether*, *Reboot*).
 
 ---
 
@@ -73,7 +97,7 @@ Replaces over-engineered 15m clash radii and force spikes with true-to-scale phy
 
 ### One-Click Startup (PowerShell)
 ```powershell
-# Run the automated 2.0s headless smoke test (exits code 0)
+# Run the automated headless smoke test (exits code 0 in ~0.15s)
 .\run.ps1 -SmokeTest
 
 # Launch simulation backend and auto-open WebGL GCS in default browser
@@ -81,7 +105,6 @@ Replaces over-engineered 15m clash radii and force spikes with true-to-scale phy
 ```
 
 ### Direct Python Invocation
-Thanks to self-healing Conda DLL and path bootstraps, you can launch directly:
 ```powershell
 # Interactive mode (opens browser to http://127.0.0.1:8080)
 python run.py
@@ -97,16 +120,16 @@ python run.py --smoke-test
 
 ## 4. Automated Test Suite
 
-Run the full automated unit test suite covering kinematics, 4-zone safety, tether dynamics, pluggable brains, UDP bridge, and aiohttp WebSockets:
+Run the full automated unit test suite covering kinematics, 4-zone safety, tether dynamics, pluggable brains, mission routes, RNG recon, and network bridges:
 
 ```powershell
 python -m unittest discover tests
+# or via launcher:
+.\run.ps1 -UnitTest
 ```
 
 ```text
-..........................
-----------------------------------------------------------------------
-Ran 26 tests in 0.549s
+Ran 96 tests in 0.512s
 
 OK
 ```
@@ -121,6 +144,8 @@ SwarmTech_v3-Uprising/
 ├── AGENTS.md                       # Architectural landmark & design invariant guide
 ├── SWARM_UPRISING_SPEC.md          # Complete mathematical & architectural specification
 ├── kanban.md                       # Strict single-WIP project lifecycle board
+├── kanban_scope.md                 # Deep technical scoping for candidate tickets
+├── kanban_archive.md               # Settled milestone history
 ├── run.py                          # Unified backend launcher, browser opener & smoke test runner
 ├── run.ps1                         # Zero-config PowerShell launcher with DLL path injection
 ├── backend/                        # Python Simulation & Networking Backend
@@ -141,12 +166,20 @@ SwarmTech_v3-Uprising/
 │       ├── app.js                  # Three.js 3D scene, quadcopters, drop-lines, camera
 │       ├── hud.js                  # Telemetry cards, mission dispatch, casualty lab
 │       └── ws_client.js            # Duplex WebSocket state synchronization client
-└── tests/                          # Automated unit test suite
+└── tests/                          # Automated unit test suite (96 tests)
     ├── __init__.py
     ├── test_sim_core.py            # Physics, 4-zone avoidance, tether snap, LKP tests
     ├── test_brains.py              # Brain plugins, P2P gossip wave, quorum tests
     ├── test_mavlink_bridge.py      # UDP packet dispatch and MAVLink parsing tests
-    └── test_web_server.py          # WebSocket streaming and static asset serving tests
+    ├── test_web_server.py          # WebSocket streaming and static asset serving tests
+    ├── test_succession_deconfliction.py  # Autonomic succession and peel-off corridors
+    ├── test_tether_failsafes.py    # Altitude-gated breakaway dive and jettison
+    ├── test_rtb_landing.py         # 2-stage soft landing and ATC pad allocation
+    ├── test_tri_mode_rf.py         # Tri-mode comms, EW jamming, and path loss
+    ├── test_gossip_formations.py   # Decentralized geometric swarm patterns
+    ├── test_c2_decoupling.py       # Ground truth vs autopilot decoupling
+    ├── test_mission_routes.py      # Discrete waypoint mission queues (TKT-28)
+    └── test_rng_recon.py           # Tactical RNG touch-and-go generator (TKT-29)
 ```
 
 ---
@@ -166,4 +199,4 @@ SwarmTech_v3-Uprising/
 
 ## 7. License
 
-Distributed under the MIT License. Built with passion for autonomous multi-agent robotics.
+Distributed under the MIT License. Built for autonomous multi-agent robotics.

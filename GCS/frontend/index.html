@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SwarmTech3_UpRising | Tactical WebGL GCS</title>
+  <meta name="description" content="50/50 Autonomous Drone Swarm Simulation and Hardware-Accelerated 3D WebGL Ground Control Station.">
+  <link rel="stylesheet" href="css/style.css">
+  
+  <!-- Three.js (r128) & OrbitControls from CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+  <!-- Top Tactical Telemetry Header -->
+  <header id="top-bar">
+    <div class="brand-section">
+      <span class="brand-logo">&#x25C7; SWARMTECH-3</span>
+      <span class="brand-badge">UPRISING // 50:50</span>
+    </div>
+
+    <div class="status-section">
+      <div class="status-pill">
+        <div id="hud-conn-ind" class="status-indicator"></div>
+        <span id="hud-conn-text">CONNECTING...</span>
+      </div>
+
+      <div class="status-pill">
+        COMMS: <strong id="hud-comms">TETHERED_RELAY</strong>
+      </div>
+
+      <div class="status-pill">
+        BRAIN: <strong id="hud-brain">LEADER_FOLLOWER</strong>
+      </div>
+
+      <div class="status-pill">
+        FORMATION: <strong id="hud-mode">ECHELON_ESCORT</strong>
+      </div>
+
+      <div class="status-pill">
+        FLEET: <strong id="hud-drones">--/--</strong>
+      </div>
+
+      <div class="status-pill">
+        SIM TIME: <strong id="hud-sim-time">0.0s</strong>
+      </div>
+
+      <div class="status-pill">
+        GPU: <strong id="hud-fps">60 FPS</strong>
+      </div>
+      
+      <div id="hud-failsafe-pill" class="status-pill failsafe-pill hidden">
+        <span class="failsafe-pulse"></span>
+        <span id="hud-failsafe-text">UPLINK ACTIVE</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- 3D WebGL Canvas Viewport -->
+  <main id="viewport-container"></main>
+
+  <!-- Left Tactical Panel: Real-Time Fleet Telemetry Cards -->
+  <aside id="left-panel" class="tactical-panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <span class="panel-icon">&#x25C8;</span> FLEET TELEMETRY
+      </div>
+      <button id="toggle-left-panel" class="panel-collapse-btn" title="Toggle Panel">&#x25C4;</button>
+    </div>
+    <div id="telemetry-cards" class="panel-content scrollable">
+      <!-- Drone cards dynamically populated and updated in-place by hud.js -->
+    </div>
+  </aside>
+
+  <!-- Right Tactical Panel: Mission Command Deck -->
+  <aside id="right-panel" class="tactical-panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <span class="panel-icon">&#x2699;</span> COMMAND DECK
+      </div>
+      <button id="toggle-right-panel" class="panel-collapse-btn" title="Toggle Panel">&#x25BA;</button>
+    </div>
+    <div id="command-deck" class="panel-content scrollable">
+
+      <!-- Section: Swarm Comms & Architecture (TKT-17) -->
+      <div class="control-group">
+        <div class="group-title">&#x25C8; SWARM ARCHITECTURE</div>
+        <div class="btn-grid-3">
+          <button id="btn-mode-tether" class="tactical-btn active-selection" title="Hardline tethered leader, star RF followers, immune to EW jamming">TETHER RELAY</button>
+          <button id="btn-mode-star" class="tactical-btn" title="Untethered wireless RF star, leader has RF link to GCS">WIRELESS STAR</button>
+          <button id="btn-mode-mesh" class="tactical-btn" title="Decentralized wireless P2P mesh with multi-hop gossip consensus">P2P MESH</button>
+        </div>
+      </div>
+
+      <!-- Section: RF Channel & Electronic Warfare (PLN-03) -->
+      <div class="control-group rf-group">
+        <div class="group-title rf-title">&#x26A1; RF CHANNEL &amp; JAMMING</div>
+        <div class="slider-row">
+          <input type="range" id="rf-jamming-slider" min="0" max="50" value="0" step="5" class="tactical-slider">
+          <span id="rf-jamming-val" class="slider-val">0% JAMMING</span>
+        </div>
+        <div class="rf-stats-row">
+          <span>GCS HORIZON: <strong>120m</strong></span>
+          <span id="rf-env-status">RF: <strong>NOMINAL</strong></span>
+        </div>
+      </div>
+
+      <!-- Section: Flight Formation -->
+      <div class="control-group">
+        <div class="group-title">SWARM FORMATION</div>
+        <div class="btn-grid-2">
+          <button id="btn-form-echelon" class="tactical-btn active-selection">ECHELON</button>
+          <button id="btn-form-boids" class="tactical-btn">NATURAL BOIDS</button>
+          <button id="btn-form-vortex" class="tactical-btn">ORBIT VORTEX</button>
+          <button id="btn-form-patrol" class="tactical-btn">PERIMETER</button>
+        </div>
+      </div>
+
+      <!-- Section: Target Waypoints & Dispatch -->
+      <div class="control-group">
+        <div class="group-title">MISSION DISPATCH</div>
+        <div class="btn-grid-2">
+          <button id="btn-wp-alpha" class="tactical-btn preset-btn">ALPHA [60, 40, 30]</button>
+          <button id="btn-wp-bravo" class="tactical-btn preset-btn">BRAVO [-40, 70, 45]</button>
+          <button id="btn-wp-charlie" class="tactical-btn preset-btn">CHARLIE [50, -50, 25]</button>
+          <button id="btn-wp-rtb" class="tactical-btn preset-btn">RTB BASE [0, 0, 20]</button>
+        </div>
+        <div class="route-header-row">
+          <span class="group-sub">TACTICAL ROUTE MISSIONS</span>
+          <span id="route-active-badge" class="badge-route-inactive">STANDBY</span>
+        </div>
+        <div class="btn-grid-3">
+          <button id="btn-route-box" class="tactical-btn route-btn" title="4-Point Perimeter Box">BOX</button>
+          <button id="btn-route-diamond" class="tactical-btn route-btn" title="4-Point Diamond Survey">DIAMOND</button>
+          <button id="btn-route-hexagon" class="tactical-btn route-btn" title="6-Point Hexagon Sweep">HEXAGON</button>
+        </div>
+        <div class="btn-grid-2" style="margin-top: 4px;">
+          <button id="btn-toggle-patrol" class="tactical-btn btn-patrol" title="Continuous 3D figure-8 patrol stream">&#x221E; FIG-8 STREAM</button>
+          <button id="btn-toggle-rng" class="tactical-btn btn-rng" title="Tactical RNG touch-and-go reconnaissance">&#x1F3B2; RNG RECON</button>
+        </div>
+        <button id="btn-stop-route" class="tactical-btn btn-danger" style="display: none; margin-top: 4px; width: 100%;">&#x23F9; ABORT ROUTE</button>
+        
+        <div id="hud-target-status" class="target-status-line status-synced">
+          <span class="tgt-label cmd-label"><span class="tgt-dot dot-cmd"></span>CMD</span>
+          <span id="val-cmd-tgt" class="tgt-coord">[60, 40, 30]</span>
+          <span class="tgt-sep">|</span>
+          <span class="tgt-label ack-label"><span class="tgt-dot dot-ack"></span>ACK</span>
+          <span id="val-ack-tgt" class="tgt-coord">[60, 40, 30]</span>
+        </div>
+
+        <div class="coord-input-row">
+          <input type="number" id="tgt-input-x" class="tactical-input" placeholder="X" value="60" step="5">
+          <input type="number" id="tgt-input-y" class="tactical-input" placeholder="Y" value="40" step="5">
+          <input type="number" id="tgt-input-z" class="tactical-input" placeholder="Z" value="30" step="5">
+          <button id="btn-dispatch-custom" class="tactical-btn btn-send">SEND</button>
+        </div>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="chk-click-target" checked>
+          <span>CLICK GROUND GRID TO DISPATCH</span>
+        </label>
+      </div>
+
+      <!-- Section: 2-Stage Tactical Recovery & Soft-Landing (TKT-19) -->
+      <div class="control-group recovery-group">
+        <div class="group-title recovery-title">&#x25C9; RECOVERY &amp; SOFT-LANDING</div>
+        <div class="btn-grid-2">
+          <button id="btn-rtb-hold" class="tactical-btn btn-rtb" title="Stage 1: Transit to Base (0,0,25) in overhead sentry ring">&#x2302; RTB (HOLD)</button>
+          <button id="btn-land-swarm" class="tactical-btn btn-land-all" title="Stage 2: ATC pad allocation &amp; staggered soft-landing">&#x2913; LAND SWARM</button>
+        </div>
+        <button id="btn-cancel-rtb" class="tactical-btn btn-cancel-recovery" style="display: none;">&#x2716; CANCEL RECOVERY &amp; RESUME</button>
+      </div>
+
+      <!-- Section: Casualty Lab Controls -->
+      <div class="control-group danger-group">
+        <div class="group-title danger-title">&#x26A0; CASUALTY SIMULATION LAB</div>
+        <div class="btn-grid-2">
+          <button id="btn-kill-leader" class="tactical-btn btn-danger">&#x26A1; KILL LEADER</button>
+          <button id="btn-cut-tether" class="tactical-btn btn-danger">&#x2702; CUT / JETTISON TETHER</button>
+          <button id="btn-kill-random" class="tactical-btn btn-danger">&#x25BD; KILL ESCORT</button>
+          <button id="btn-respawn-dead" class="tactical-btn btn-respawn">&#x267B; RESPAWN DEAD</button>
+        </div>
+        <button id="btn-clear-wreckage" class="tactical-btn btn-salvage">&#x232B; CLEAR WRECKAGE</button>
+        <button id="btn-reinforce-swarm" class="tactical-btn btn-reinforce">&#x25B2; + LAUNCH REINFORCEMENT</button>
+        <button id="btn-reboot-fleet" class="tactical-btn btn-full-reset">&#x21BA; FACTORY RESET SWARM</button>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- Bottom Event Log Feed -->
+  <section id="event-feed-panel">
+    <div class="event-feed-header">
+      <span class="feed-icon">&#x25C7;</span> TACTICAL TELEMETRY EVENT LOG
+    </div>
+    <ul id="event-log-list" class="scrollable">
+      <!-- Log lines dynamically injected -->
+    </ul>
+  </section>
+
+  <!-- Camera Controls Hint -->
+  <div id="camera-hints">
+    <div><span>[L-DRAG]</span> ORBIT</div>
+    <div><span>[R-DRAG]</span> PAN</div>
+    <div><span>[WHEEL]</span> ZOOM</div>
+    <div><span>[C]</span> CHASE CAM</div>
+    <div><span>[R]</span> RESET CAM</div>
+  </div>
+
+  <!-- Telemetry Client, Three.js Viewport App & Tactical HUD -->
+  <script src="js/ws_client.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/hud.js"></script>
+</body>
+</html>

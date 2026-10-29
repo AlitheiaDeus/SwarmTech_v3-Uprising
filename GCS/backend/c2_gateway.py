@@ -1,0 +1,416 @@
+"""
+SwarmTech3_UpRising: Tactical Ground Control Station (GCS) C2 Gateway (c2_gateway.py)
+Bubble 1: Operator Airgap.
+Owns mission route planning, RNG touch-and-go recon generator, target patrol trajectory math,
+dwell countdowns, commanded target beacons, and operator UI event dispatching.
+Communicates strictly across the Canyon Airgap via network packets / protocol interfaces.
+"""
+
+from __future__ import annotations
+import math
+import os
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any, Union
+import numpy as np
+
+# Radio Comms & Range Constants
+RADIO_RANGE: float = 120.0
+TETHER_ANCHOR = np.array([0.0, 0.0, 1.5], dtype=float)
+
+# Discrete Waypoint Mission Route Presets (TKT-28)
+ROUTE_PRESETS: Dict[str, List[List[float]]] = {
+    "BOX_PATROL": [
+        [40.0, -20.0, 25.0],
+        [40.0, 40.0, 28.0],
+        [-20.0, 40.0, 25.0],
+        [-20.0, -20.0, 22.0],
+    ],
+    "DIAMOND_SURVEY": [
+        [50.0, 10.0, 28.0],
+        [15.0, 45.0, 25.0],
+        [-20.0, 10.0, 24.0],
+        [15.0, -25.0, 26.0],
+    ],
+    "HEXAGON_SWEEP": [
+        [45.0, 25.0, 26.0],
+        [20.0, 45.0, 28.0],
+        [-15.0, 30.0, 25.0],
+        [-25.0, -5.0, 24.0],
+        [-5.0, -30.0, 26.0],
+        [30.0, -20.0, 27.0],
+    ],
+}
+
+
+class C2Gateway:
+    """Tactical C2 Mission Gateway running at the GCS operator layer.
+    Manages operator flight intents, discrete route queues, continuous figure-8 patrol,
+    and semi-autonomous RNG touch-and-go exploratory reconnaissance."""
+
+    def __init__(self, sim: Optional[Any] = None):
+        self.sim: Optional[Any] = sim
+
+        # Commanded Target (GCS intent)
+        self._target_pos: np.ndarray = np.array([60.0, 40.0, 30.0], dtype=float)
+
+        # Dynamic Target Auto-Patrol Loop (TKT-12)
+        self.patrol_active: bool = False
+        self.patrol_speed: float = 0.08  # Radians per second (~78s per loop)
+        self.patrol_time: float = 0.0
+        self.patrol_center: np.ndarray = np.array([20.0, 20.0, 28.0], dtype=float)
+        self.patrol_scale: np.ndarray = np.array([50.0, 35.0, 10.0], dtype=float)
+        self.last_gossip_inject_time: float = 0.0
+
+        # Discrete Waypoint Mission Routes (TKT-28)
+        self.route_active: bool = False
+        self.route_name: str = "NONE"
+        self.route_waypoints: List[np.ndarray] = []
+        self.route_loop: bool = True
+        self.route_acceptance_radius: float = 2.5
+
+        # Tactical RNG Touch-and-Go Reconnaissance (TKT-29)
+        self.rng_recon_active: bool = False
+        self.rng_dwelling: bool = False
+        self.rng_dwell_time: float = 2.0         # 2.0s tactical dwell / sensor scan countdown
+        self.rng_dwell_timer: float = 0.0
+        self.rng_station_count: int = 0
+        self.rng_geofence_min: np.ndarray = np.array([-50.0, -50.0, 10.0], dtype=float)
+        self.rng_geofence_max: np.ndarray = np.array([70.0, 70.0, 35.0], dtype=float)
+        self.rng_min_variance: float = 15.0      # Minimum transit jump distance (m)
+        self.rng_tether_clearance: float = 3.0   # Horizontal clearance from anchor (m)
+
+    @property
+    def target_pos(self) -> np.ndarray:
+        return self._target_pos
+
+    @target_pos.setter
+    def target_pos(self, value: Union[List[float], np.ndarray]) -> None:
+        self.set_target(value)
+
+    def attach_sim(self, sim: Any) -> None:
+        """Attach underlying simulation or network bridge interface."""
+        self.sim = sim
+
+    def step(self, dt: float) -> None:
+        """Advance C2 layer state machine: auto-patrol generator, RNG recon dwell & generation."""
+        if self.sim is None:
+            return
+
+        sim_time = getattr(self.sim, "sim_time", 0.0)
+
+        # 1. Continuous Auto-Patrol Loop (TKT-12)
+        if self.patrol_active:
+            self.patrol_time += dt * self.patrol_speed
+            t = self.patrol_time
+            patrol_x = float(self.patrol_center[0] + self.patrol_scale[0] * math.cos(t))
+            patrol_y = float(self.patrol_center[1] + self.patrol_scale[1] * math.sin(2.0 * t) * 0.75)
+            patrol_z = float(max(15.0, self.patrol_center[2] + self.patrol_scale[2] * math.sin(t * 1.5)))
+
+            # Update Commanded Target at GCS
+            self._target_pos = np.array([patrol_x, patrol_y, patrol_z], dtype=float)
+
+            should_update_uplink = True
+            active_brain = getattr(self.sim, "active_brain_name", "")
+            if active_brain == "GOSSIP_CONSENSUS":
+                time_since_last = sim_time - self.last_gossip_inject_time
+                brain = getattr(self.sim, "brain", None)
+                if brain and hasattr(brain, "get_telemetry_extra"):
+                    gossip_extra = brain.get_telemetry_extra()
+                    consensus_reached = gossip_extra.get("consensus_reached", True)
+                    if not consensus_reached and time_since_last < 2.5:
+                        should_update_uplink = False
+                    elif time_since_last < 1.2:
+                        should_update_uplink = False
+
+            if should_update_uplink:
+                res = self.dispatch_target_uplink(self._target_pos)
+                if active_brain == "GOSSIP_CONSENSUS" and res.get("status") == "OK":
+                    self.last_gossip_inject_time = sim_time
+
+        # 2. Tactical RNG Touch-and-Go Reconnaissance Generator (TKT-29)
+        elif self.rng_recon_active:
+            target_reached = self.is_target_reached()
+            if target_reached:
+                if not self.rng_dwelling:
+                    # Arrival detected: initiate tactical dwell / sensor scan countdown
+                    self.rng_dwelling = True
+                    self.rng_dwell_timer = self.rng_dwell_time
+                    self.rng_station_count += 1
+                else:
+                    self.rng_dwell_timer = max(0.0, self.rng_dwell_timer - dt)
+                    if self.rng_dwell_timer <= 0.0:
+                        # Dwell complete: compute new randomized, high-variance SAFE target
+                        new_target = self.generate_safe_rng_target()
+                        self._target_pos = np.copy(new_target)
+                        res = self.dispatch_target_uplink(new_target)
+                        if res.get("status") == "OK":
+                            self.rng_dwelling = False
+                            active_brain = getattr(self.sim, "active_brain_name", "")
+                            if active_brain == "GOSSIP_CONSENSUS":
+                                self.last_gossip_inject_time = sim_time
+            else:
+                self.rng_dwelling = False
+
+    def is_target_reached(self, threshold: float = 2.5) -> bool:
+        """Deterministic arrival check: whether active swarm guidance has arrived within threshold."""
+        if self.sim is None:
+            return False
+
+        active_brain = getattr(self.sim, "active_brain_name", "")
+        drones = getattr(self.sim, "drones", [])
+
+        if active_brain == "GOSSIP_CONSENSUS":
+            active = [
+                d for d in drones
+                if not d.crashed and getattr(d, "flight_state", "") not in ("LANDED", "DESCENDING")
+            ]
+            if not active:
+                return False
+            centroid = np.mean([d.pos for d in active], axis=0)
+            target = self.get_acknowledged_target()
+            return float(np.linalg.norm(centroid - target)) <= threshold
+        else:
+            leader = getattr(self.sim, "leader", None)
+            if leader is None or leader.crashed:
+                return False
+            target = leader.acknowledged_target
+            return float(np.linalg.norm(leader.pos - target)) <= threshold
+
+    def get_acknowledged_target(self) -> np.ndarray:
+        """Get the target currently acknowledged by the swarm."""
+        if self.sim is None:
+            return self._target_pos
+        if hasattr(self.sim, "get_acknowledged_target"):
+            return self.sim.get_acknowledged_target()
+        leader = getattr(self.sim, "leader", None)
+        if leader:
+            return leader.acknowledged_target
+        return self._target_pos
+
+    def generate_safe_rng_target(self) -> np.ndarray:
+        """Generate a high-variance, guaranteed-SAFE 3D target coordinate."""
+        current_target = np.copy(self.get_acknowledged_target())
+        anchor = getattr(self.sim, "tether_anchor", TETHER_ANCHOR)
+
+        for _ in range(200):
+            rx = float(np.random.uniform(self.rng_geofence_min[0], self.rng_geofence_max[0]))
+            ry = float(np.random.uniform(self.rng_geofence_min[1], self.rng_geofence_max[1]))
+            rz = float(np.random.uniform(self.rng_geofence_min[2], self.rng_geofence_max[2]))
+            cand = np.array([rx, ry, rz], dtype=float)
+
+            # High variance: ensure jump distance >= 15m
+            if float(np.linalg.norm(cand - current_target)) < self.rng_min_variance:
+                continue
+
+            # Safe tether clearance: outside 3m cylinder around anchor
+            anchor_dist_xy = float(np.hypot(cand[0] - anchor[0], cand[1] - anchor[1]))
+            if anchor_dist_xy < self.rng_tether_clearance:
+                continue
+
+            return cand
+
+        # Deterministic safe offset fallback
+        dx = 20.0 if current_target[0] <= 10.0 else -20.0
+        dy = 20.0 if current_target[1] <= 10.0 else -20.0
+        dz = 25.0
+        return np.array([current_target[0] + dx, current_target[1] + dy, dz], dtype=float)
+
+    def dispatch_target_uplink(self, target_pos: Union[List[float], np.ndarray]) -> Dict[str, Any]:
+        """Dispatch commanded target across simulated link to fleet."""
+        if self.sim is None:
+            return {"status": "ERROR", "reason": "NO_SIM_ATTACHED"}
+        if hasattr(self.sim, "dispatch_target_uplink"):
+            return self.sim.dispatch_target_uplink(target_pos)
+        return {"status": "OK", "target": list(target_pos)}
+
+    def set_target(self, pos: Union[List[float], np.ndarray]) -> Dict[str, Any]:
+        """Command a new 3D mission target waypoint from GCS and attempt uplink dispatch."""
+        target_arr = np.array(pos, dtype=float)
+        self._target_pos = target_arr
+
+        # Manual target dispatch disengages active mission route, auto-patrol, and RNG recon
+        if self.route_active:
+            self.route_active = False
+            if self.sim:
+                for d in getattr(self.sim, "drones", []):
+                    d.mission_active = False
+        if self.rng_recon_active:
+            self.rng_recon_active = False
+            self.rng_dwelling = False
+
+        uplink_res = self.dispatch_target_uplink(self._target_pos)
+
+        # Disengage RTB marshal if commanded away from base
+        if not np.allclose(self._target_pos, [0.0, 0.0, 25.0], atol=1.0):
+            if self.sim:
+                overhead = getattr(self.sim, "overhead_marshal_active", False)
+                rtb = getattr(self.sim, "swarm_rtb_active", False)
+                if (overhead or rtb) and uplink_res.get("status") == "OK":
+                    if hasattr(self.sim, "cancel_rtb"):
+                        self.sim.cancel_rtb()
+
+        return uplink_res
+
+    def toggle_target_patrol(self, active: Optional[bool] = None) -> bool:
+        """Toggle or explicitly set continuous 3D target auto-patrol loop."""
+        if active is not None:
+            self.patrol_active = bool(active)
+        else:
+            self.patrol_active = not self.patrol_active
+        if self.patrol_active:
+            self.last_gossip_inject_time = 0.0
+            if self.route_active:
+                self.route_active = False
+                if self.sim:
+                    for d in getattr(self.sim, "drones", []):
+                        d.mission_active = False
+            if self.rng_recon_active:
+                self.rng_recon_active = False
+                self.rng_dwelling = False
+        return self.patrol_active
+
+    def start_route_preset(self, preset_name: str) -> Dict[str, Any]:
+        """Deploy and start a predefined route preset (TKT-28)."""
+        name = preset_name.upper().replace("-", "_").replace(" ", "_")
+        if name not in ROUTE_PRESETS:
+            return {"status": "ERROR", "reason": f"Unknown preset: {preset_name}"}
+        wps = ROUTE_PRESETS[name]
+        return self.deploy_mission_route(wps, loop=True, name=name)
+
+    def deploy_mission_route(
+        self,
+        waypoints: Union[List[List[float]], List[np.ndarray]],
+        loop: bool = True,
+        name: str = "CUSTOM",
+    ) -> Dict[str, Any]:
+        """Deploy discrete waypoint mission route to the swarm over physical comms uplink (TKT-28)."""
+        if not waypoints:
+            return {"status": "ERROR", "reason": "Empty waypoints list"}
+
+        clean_wps = [np.array(wp, dtype=float) for wp in waypoints]
+
+        if self.sim is None:
+            self.route_active = True
+            self.route_name = name
+            self.route_waypoints = clean_wps
+            self.route_loop = loop
+            self._target_pos = np.copy(clean_wps[0])
+            return {"status": "OK", "name": name, "count": len(clean_wps), "loop": loop}
+
+        drones = getattr(self.sim, "drones", [])
+        active_brain = getattr(self.sim, "active_brain_name", "")
+        tether_anchor = getattr(self.sim, "tether_anchor", TETHER_ANCHOR)
+        comms_mode = getattr(self.sim, "comms_mode", "TETHERED_RELAY")
+        tether_severed = getattr(self.sim, "tether_severed", False)
+
+        # Determine gateway drone for uplink
+        if active_brain == "GOSSIP_CONSENSUS":
+            living_drones = [d for d in drones if not d.crashed]
+            if not living_drones:
+                return {"status": "DROPPED", "reason": "NO_LIVING_DRONES"}
+            target_drone = min(
+                living_drones,
+                key=lambda d: float(np.linalg.norm(d.pos - tether_anchor)),
+            )
+        else:
+            target_drone = getattr(self.sim, "leader", None)
+            if target_drone is None or target_drone.crashed:
+                return {"status": "DROPPED", "reason": "NO_ACTIVE_LEADER"}
+
+        # Calculate link distance and drop probability
+        dist_gcs = float(np.linalg.norm(target_drone.pos - tether_anchor))
+        is_hardline = (comms_mode == "TETHERED_RELAY" and not tether_severed and target_drone.id == 0)
+
+        if not is_hardline:
+            if comms_mode == "TETHERED_RELAY" and tether_severed:
+                return {"status": "DROPPED", "reason": "TETHER_SEVERED", "error": "Tactical umbilical is severed."}
+            if dist_gcs > RADIO_RANGE:
+                return {"status": "OUT_OF_RANGE", "reason": "RADIO_RANGE_EXCEEDED", "error": f"Gateway node ({dist_gcs:.1f}m) out of GCS radio range ({RADIO_RANGE}m)"}
+            if hasattr(self.sim, "is_packet_dropped") and self.sim.is_packet_dropped(dist_gcs, is_hardline=False):
+                return {"status": "DROPPED", "reason": "PACKET_LOSS"}
+
+        # Link healthy: deploy to GCS C2 state
+        self.route_active = True
+        self.route_name = name
+        self.route_waypoints = clean_wps
+        self.route_loop = loop
+        self.patrol_active = False
+        self.rng_recon_active = False
+        self.rng_dwelling = False
+
+        # Upload to drone OBC
+        target_drone.mission_waypoints = [np.copy(wp) for wp in clean_wps]
+        target_drone.current_wp_idx = 0
+        target_drone.mission_active = True
+        target_drone.mission_loop = loop
+        target_drone.acknowledged_target = np.copy(clean_wps[0])
+
+        # If Gossip brain, disseminate route to peers
+        brain = getattr(self.sim, "brain", None)
+        if active_brain == "GOSSIP_CONSENSUS" and brain and hasattr(brain, "on_route_deployed"):
+            brain.on_route_deployed(clean_wps, loop=loop)
+
+        # Update Commanded Target at GCS
+        self._target_pos = np.copy(clean_wps[0])
+
+        return {
+            "status": "OK",
+            "name": self.route_name,
+            "waypoints": [list(wp) for wp in self.route_waypoints],
+            "count": len(self.route_waypoints),
+            "loop": self.route_loop,
+        }
+
+    def stop_mission_route(self) -> Dict[str, Any]:
+        """Stop active mission route and hold current position (TKT-28)."""
+        self.route_active = False
+        if self.sim:
+            for d in getattr(self.sim, "drones", []):
+                d.mission_active = False
+            brain = getattr(self.sim, "brain", None)
+            if brain and hasattr(brain, "route_active"):
+                brain.route_active = False
+        return {"status": "OK", "action": "ROUTE_STOPPED"}
+
+    def toggle_rng_recon(self, active: Optional[bool] = None) -> bool:
+        """Toggle or explicitly set tactical RNG Touch-and-Go reconnaissance mode (TKT-29)."""
+        if active is not None:
+            self.rng_recon_active = bool(active)
+        else:
+            self.rng_recon_active = not self.rng_recon_active
+
+        if self.rng_recon_active:
+            self.patrol_active = False
+            self.stop_mission_route()
+            self.rng_dwelling = False
+            self.rng_dwell_timer = 0.0
+
+            if self.is_target_reached():
+                self.rng_dwelling = True
+                self.rng_dwell_timer = self.rng_dwell_time
+                self.rng_station_count += 1
+        else:
+            self.rng_dwelling = False
+            self.rng_dwell_timer = 0.0
+
+        return self.rng_recon_active
+
+    def start_rng_recon(self) -> Dict[str, Any]:
+        """Activate RNG touch-and-go reconnaissance mode (TKT-29)."""
+        self.toggle_rng_recon(True)
+        return {
+            "status": "OK",
+            "action": "RNG_RECON_STARTED",
+            "station_count": self.rng_station_count,
+            "dwell_time": self.rng_dwell_time,
+        }
+
+    def stop_rng_recon(self) -> Dict[str, Any]:
+        """Deactivate RNG touch-and-go reconnaissance mode (TKT-29)."""
+        self.toggle_rng_recon(False)
+        return {
+            "status": "OK",
+            "action": "RNG_RECON_STOPPED",
+            "station_count": self.rng_station_count,
+        }

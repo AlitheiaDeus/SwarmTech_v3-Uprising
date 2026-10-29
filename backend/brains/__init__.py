@@ -1,27 +1,15 @@
 """
-SwarmTech3_UpRising: Pluggable Guidance Brain Architecture
-Defines BaseBrain interface and registry for hot-swappable guidance plugins.
+SwarmTech3_UpRising: Pluggable Guidance Brain Architecture (Backward-Compatible Facade)
+Re-exports from Bubble 2: OBC.backend.brains
 """
 
-from typing import Dict, Type
-from backend.brains.base import BaseBrain
-from backend.brains.leader_follower import LeaderFollowerBrain
-from backend.brains.gossip_consensus import GossipConsensusBrain
-
-BRAIN_REGISTRY: Dict[str, Type[BaseBrain]] = {
-    "LEADER_FOLLOWER": LeaderFollowerBrain,
-    "GOSSIP_CONSENSUS": GossipConsensusBrain,
-}
-
-
-def register_brain(name: str):
-    """Decorator to register a guidance brain plugin."""
-    def decorator(cls: Type[BaseBrain]):
-        BRAIN_REGISTRY[name.upper()] = cls
-        cls.brain_name = name.upper()
-        return cls
-    return decorator
-
+from OBC.backend.brains import (
+    BaseBrain,
+    BRAIN_REGISTRY,
+    register_brain,
+    LeaderFollowerBrain,
+    GossipConsensusBrain,
+)
 
 __all__ = [
     "BaseBrain",

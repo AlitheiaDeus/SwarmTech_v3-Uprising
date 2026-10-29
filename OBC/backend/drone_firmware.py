@@ -1,0 +1,176 @@
+"""
+SwarmTech3_UpRising: Autonomous Drone Firmware & OBC State Bubble (drone_firmware.py)
+Represents the autonomous Onboard Computer (OBC) for an individual airframe.
+Maintains kinematics state, telemetry, local acknowledged target mailbox,
+discrete waypoint queue, altitude-gated breakaway dive, and local failsafes.
+"""
+
+from __future__ import annotations
+import os
+import sys
+from pathlib import Path
+from typing import Dict, List, Optional, Any, Union
+import numpy as np
+
+# Hardware Tiers for Succession Scoring
+TIER_LEADER: int = 3
+TIER_ESCORT: int = 2
+TIER_SCOUT: int = 1
+
+
+class Drone:
+    """Represents an autonomous quadcopter agent with physical kinematics,
+    telemetry state, comms link, and navigation brain."""
+
+    def __init__(
+        self,
+        drone_id: int,
+        tier: int = TIER_ESCORT,
+        pos: Optional[np.ndarray] = None,
+        is_leader: bool = False,
+    ):
+        self.id: int = drone_id
+        self.tier: int = tier
+        self.is_leader: bool = is_leader
+
+        # Kinematics
+        self.pos: np.ndarray = (
+            np.array(pos, dtype=float) if pos is not None else np.zeros(3, dtype=float)
+        )
+        self.vel: np.ndarray = np.zeros(3, dtype=float)
+        self.acc: np.ndarray = np.zeros(3, dtype=float)
+
+        # Orientation & Visuals
+        self.yaw: float = 0.0          # Radians (0 = +X axis)
+        self.pitch: float = 0.0        # Radians
+        self.roll: float = 0.0         # Radians
+        self.rotor_rpm: float = 5200.0 # Visual rotor speed
+
+        # Comms & Fault Tolerance
+        self.crashed: bool = False
+        self.flight_state: str = "CRUISE"  # "TAKEOFF", "EN_ROUTE", "CRUISE", "CRASHED"
+        self.lost_link: bool = False
+        self.lkp: np.ndarray = np.copy(self.pos)
+        self.last_heartbeat_time: float = 0.0
+        self.rssi: float = -45.0           # Signal strength (dBm) (TKT-17)
+        self.link_quality: float = 1.0     # Normalized link quality [0.0, 1.0] (TKT-17)
+
+        # Status & Battery
+        self.battery: float = 100.0
+        self.status: str = "ACTIVE" if not is_leader else "FLEET_LEADER"
+        self.tether_lost: bool = False
+
+        # Succession Deconfliction & Lateral Peel-Off (TKT-15)
+        self.peel_off_timer: float = 0.0
+        self.peel_off_dir: np.ndarray = np.zeros(3, dtype=float)
+        self.promotion_timer: float = 0.0
+
+        # Tether Failsafes & Cable Jettison (TKT-16 / TKT-27)
+        self.jettison_timer: float = 0.0
+        self.jettison_watchdog: float = 6.0
+        self.tether_jettisoned: bool = False
+        self.tether_failsafe_policy: str = "REJOIN"  # "REJOIN" or "RTB"
+
+        # Autonomous Swarm RTB & Coordinated Soft-Landing (TKT-19)
+        self.landing_pad_idx: Optional[int] = None
+        self.landing_pad: Optional[np.ndarray] = None
+        self.landing_wait_timer: float = 0.0
+        self.landing_stage: str = "NONE"  # "NONE", "WAITING_CLEARANCE", "APPROACH", "FINAL_DESCENT", "LANDED"
+
+        # Onboard Target Buffer (TKT-25: Ground Truth vs Autopilot Decoupling)
+        self.acknowledged_target: np.ndarray = (
+            np.array(pos, dtype=float) if pos is not None else np.array([60.0, 40.0, 30.0], dtype=float)
+        )
+
+        # Discrete Waypoint Mission Queue (TKT-28)
+        self.mission_waypoints: List[np.ndarray] = []
+        self.current_wp_idx: int = 0
+        self.mission_active: bool = False
+        self.mission_loop: bool = True
+
+    def reset_state(
+        self,
+        pos: np.ndarray,
+        is_leader: bool = False,
+        flight_state: str = "TAKEOFF",
+    ) -> None:
+        """Reset drone state for relaunch or reboot."""
+        self.pos = np.array(pos, dtype=float)
+        self.vel = np.zeros(3, dtype=float)
+        self.acc = np.zeros(3, dtype=float)
+        self.yaw = 0.0
+        self.pitch = 0.0
+        self.roll = 0.0
+        self.rotor_rpm = 5200.0
+        self.crashed = False
+        self.flight_state = flight_state
+        self.lost_link = False
+        self.lkp = np.copy(self.pos)
+        self.last_heartbeat_time = 0.0
+        self.rssi = -45.0
+        self.link_quality = 1.0
+        self.battery = 100.0
+        self.is_leader = is_leader
+        self.status = "FLEET_LEADER" if is_leader else "ACTIVE"
+        self.tether_lost = False
+        self.peel_off_timer = 0.0
+        self.peel_off_dir = np.zeros(3, dtype=float)
+        self.promotion_timer = 0.0
+        self.jettison_timer = 0.0
+        self.jettison_watchdog = 6.0
+        self.tether_jettisoned = False
+        self.tether_failsafe_policy = "REJOIN"
+        self.landing_pad_idx = None
+        self.landing_pad = None
+        self.landing_wait_timer = 0.0
+        self.landing_stage = "NONE"
+        self.acknowledged_target = np.array(pos, dtype=float)
+        self.mission_waypoints = []
+        self.current_wp_idx = 0
+        self.mission_active = False
+        self.mission_loop = True
+
+    @property
+    def target_reached(self) -> bool:
+        """Whether this drone has arrived within 2.5m acceptance radius of its acknowledged target."""
+        if self.crashed:
+            return False
+        return float(np.linalg.norm(self.pos - self.acknowledged_target)) <= 2.5
+
+    def succession_score(self) -> int:
+        """Calculate autonomic succession eligibility score: (Tier * 1000) - ID."""
+        return (self.tier * 1000) - self.id
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize state for WebSocket JSON telemetry frame."""
+        return {
+            "id": self.id,
+            "tier": self.tier,
+            "is_leader": self.is_leader,
+            "pos": [round(float(v), 2) for v in self.pos],
+            "vel": [round(float(v), 2) for v in self.vel],
+            "yaw": round(float(self.yaw), 3),
+            "pitch": round(float(self.pitch), 3),
+            "roll": round(float(self.roll), 3),
+            "crashed": self.crashed,
+            "flight_state": self.flight_state,
+            "lost_link": self.lost_link,
+            "lkp": [round(float(v), 2) for v in self.lkp],
+            "rssi": round(float(self.rssi), 1),
+            "link_quality": round(float(self.link_quality), 2),
+            "battery": round(float(self.battery), 1),
+            "status": self.status,
+            "rotor_rpm": round(float(self.rotor_rpm), 0),
+            "jettison_timer": round(float(self.jettison_timer), 2),
+            "jettison_watchdog": round(float(self.jettison_watchdog), 2),
+            "tether_jettisoned": self.tether_jettisoned,
+            "tether_lost": self.tether_lost,
+            "tether_failsafe_policy": self.tether_failsafe_policy,
+            "landing_pad_idx": self.landing_pad_idx,
+            "landing_stage": self.landing_stage,
+            "acknowledged_target": [round(float(v), 2) for v in self.acknowledged_target],
+            "mission_active": self.mission_active,
+            "current_wp_idx": self.current_wp_idx,
+            "wp_count": len(self.mission_waypoints),
+            "target_reached": self.target_reached,
+        }
