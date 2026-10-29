@@ -18,27 +18,28 @@ import numpy as np
 RADIO_RANGE: float = 120.0
 TETHER_ANCHOR = np.array([0.0, 0.0, 1.5], dtype=float)
 
-# Discrete Waypoint Mission Route Presets (TKT-28)
+# Discrete Waypoint Mission Route Presets (TKT-28 & TKT-30)
+# Schema: [x, y, z, loiter_s]
 ROUTE_PRESETS: Dict[str, List[List[float]]] = {
     "BOX_PATROL": [
-        [40.0, -20.0, 25.0],
-        [40.0, 40.0, 28.0],
-        [-20.0, 40.0, 25.0],
-        [-20.0, -20.0, 22.0],
+        [40.0, -20.0, 25.0, 4.0],
+        [40.0, 40.0, 28.0, 4.0],
+        [-20.0, 40.0, 25.0, 4.0],
+        [-20.0, -20.0, 22.0, 4.0],
     ],
     "DIAMOND_SURVEY": [
-        [50.0, 10.0, 28.0],
-        [15.0, 45.0, 25.0],
-        [-20.0, 10.0, 24.0],
-        [15.0, -25.0, 26.0],
+        [50.0, 10.0, 28.0, 3.0],
+        [15.0, 45.0, 25.0, 3.0],
+        [-20.0, 10.0, 24.0, 3.0],
+        [15.0, -25.0, 26.0, 3.0],
     ],
     "HEXAGON_SWEEP": [
-        [45.0, 25.0, 26.0],
-        [20.0, 45.0, 28.0],
-        [-15.0, 30.0, 25.0],
-        [-25.0, -5.0, 24.0],
-        [-5.0, -30.0, 26.0],
-        [30.0, -20.0, 27.0],
+        [45.0, 25.0, 26.0, 2.0],
+        [20.0, 45.0, 28.0, 2.0],
+        [-15.0, 30.0, 25.0, 2.0],
+        [-25.0, -5.0, 24.0, 2.0],
+        [-5.0, -30.0, 26.0, 2.0],
+        [30.0, -20.0, 27.0, 2.0],
     ],
 }
 
@@ -380,22 +381,37 @@ class C2Gateway:
 
     def deploy_mission_route(
         self,
-        waypoints: Union[List[List[float]], List[np.ndarray]],
+        waypoints: Union[List[List[float]], List[np.ndarray], List[Dict[str, float]]],
         loop: bool = True,
         name: str = "CUSTOM",
     ) -> Dict[str, Any]:
-        """Deploy discrete waypoint mission route to the swarm over physical comms uplink (TKT-28)."""
+        """Deploy discrete waypoint mission route to the swarm over physical comms uplink (TKT-28 & TKT-30).
+        Supports 4D waypoints: [x, y, z, loiter_s] or {'x': x, 'y': y, 'z': z, 'loiter': loiter_s}."""
         if not waypoints:
             return {"status": "ERROR", "reason": "Empty waypoints list"}
 
-        clean_wps = [np.array(wp, dtype=float) for wp in waypoints]
+        clean_wps: List[np.ndarray] = []
+        for wp in waypoints:
+            if isinstance(wp, dict):
+                clean_wps.append(np.array([
+                    float(wp.get("x", 0.0)),
+                    float(wp.get("y", 0.0)),
+                    float(wp.get("z", 20.0)),
+                    float(wp.get("loiter", 0.0)),
+                ], dtype=float))
+            else:
+                arr = list(wp)
+                if len(arr) == 3:
+                    clean_wps.append(np.array([float(arr[0]), float(arr[1]), float(arr[2]), 0.0], dtype=float))
+                else:
+                    clean_wps.append(np.array([float(arr[0]), float(arr[1]), float(arr[2]), float(arr[3])], dtype=float))
 
         if self.sim is None:
             self.route_active = True
             self.route_name = name
             self.route_waypoints = clean_wps
             self.route_loop = loop
-            self._target_pos = np.copy(clean_wps[0])
+            self._target_pos = np.copy(clean_wps[0][:3])
             return {"status": "OK", "name": name, "count": len(clean_wps), "loop": loop}
 
         drones = getattr(self.sim, "drones", [])
@@ -446,7 +462,9 @@ class C2Gateway:
         target_drone.current_wp_idx = 0
         target_drone.mission_active = True
         target_drone.mission_loop = loop
-        target_drone.acknowledged_target = np.copy(clean_wps[0])
+        target_drone.acknowledged_target = np.copy(clean_wps[0][:3])
+        target_drone.wp_loiter_timer = 0.0
+        target_drone.wp_loitering = False
 
         # If Gossip brain, disseminate route to peers
         brain = getattr(self.sim, "brain", None)
@@ -454,7 +472,7 @@ class C2Gateway:
             brain.on_route_deployed(clean_wps, loop=loop)
 
         # Update Commanded Target at GCS
-        self._target_pos = np.copy(clean_wps[0])
+        self._target_pos = np.copy(clean_wps[0][:3])
 
         return {
             "status": "OK",

@@ -1236,6 +1236,8 @@ class SITLWorldEngine:
             new_leader.current_wp_idx = old_leader.current_wp_idx
             new_leader.mission_active = old_leader.mission_active
             new_leader.mission_loop = old_leader.mission_loop
+            new_leader.wp_loiter_timer = getattr(old_leader, "wp_loiter_timer", 0.0)
+            new_leader.wp_loitering = getattr(old_leader, "wp_loitering", False)
 
         # Notify active brain hook of succession
         if hasattr(self, "brain") and hasattr(self.brain, "on_succession"):
@@ -1620,13 +1622,19 @@ class SITLWorldEngine:
 
         ack_target = self.get_acknowledged_target()
 
-        # Determine active route current waypoint index (TKT-28)
+        # Determine active route current waypoint index & loiter state (TKT-28 & TKT-30)
         if self.active_brain_name == "GOSSIP_CONSENSUS":
             current_wp_idx = getattr(self.brain, "current_route_wp_idx", 0)
+            current_loitering = getattr(self.brain, "wp_loitering", False)
+            current_loiter_timer = getattr(self.brain, "wp_loiter_timer", 0.0)
         elif current_leader is not None:
             current_wp_idx = current_leader.current_wp_idx
+            current_loitering = getattr(current_leader, "wp_loitering", False)
+            current_loiter_timer = getattr(current_leader, "wp_loiter_timer", 0.0)
         else:
             current_wp_idx = 0
+            current_loitering = False
+            current_loiter_timer = 0.0
 
         route_data = {
             "active": self.route_active,
@@ -1634,6 +1642,8 @@ class SITLWorldEngine:
             "loop": self.route_loop,
             "current_wp_idx": current_wp_idx,
             "waypoints": [[round(float(v), 2) for v in wp] for wp in self.route_waypoints],
+            "loitering": current_loitering,
+            "loiter_timer": round(max(0.0, float(current_loiter_timer)), 1),
         }
 
         return {

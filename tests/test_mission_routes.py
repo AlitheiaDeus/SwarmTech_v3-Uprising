@@ -28,7 +28,7 @@ class TestMissionRoutes(unittest.TestCase):
         self.assertTrue(leader.mission_active)
         self.assertEqual(len(leader.mission_waypoints), 4)
         self.assertEqual(leader.current_wp_idx, 0)
-        np.testing.assert_allclose(leader.acknowledged_target, ROUTE_PRESETS["BOX_PATROL"][0])
+        np.testing.assert_allclose(leader.acknowledged_target, ROUTE_PRESETS["BOX_PATROL"][0][:3])
 
     def test_waypoint_arrival_advancement_and_loop(self):
         """Leader advances to next waypoint upon entering 2.5m acceptance sphere and loops."""
@@ -182,7 +182,118 @@ class TestMissionRoutes(unittest.TestCase):
 
         # Gossip brain should have advanced to WP 1
         self.assertEqual(sim.brain.current_route_wp_idx, 1)
-        np.testing.assert_allclose(sim.get_acknowledged_target(), custom_wps[1])
+        np.testing.assert_allclose(sim.get_acknowledged_target(), custom_wps[1][:3])
+
+    def test_4d_waypoint_loiter_countdown_and_advancement(self):
+        """Leader enters loiter at station, counts down wp_loiter_timer, and advances only after loiter expires."""
+        sim = SwarmSimulator(drone_count=4)
+        wps = [
+            [20.0, 0.0, 20.0, 1.5],   # 1.5s loiter
+            [35.0, 15.0, 25.0, 2.0],  # 2.0s loiter
+        ]
+        sim.deploy_mission_route(wps, loop=False, name="LOITER_ROUTE")
+        leader = sim.leader
+
+        # Teleport leader to WP 0
+        leader.pos = np.array([20.1, 0.0, 20.0], dtype=float)
+        # Position escorts directly in their formation slots to satisfy stabilization gate
+        for f in sim.drones:
+            if not f.is_leader:
+                f.flight_state = "CRUISE"
+                slot = sim.brain._get_formation_slot(f, leader)
+                f.pos = np.copy(slot)
+
+        sim.step()
+
+        # Leader should have entered loiter state
+        self.assertTrue(leader.wp_loitering)
+        self.assertAlmostEqual(leader.wp_loiter_timer, 1.5 - (1.0 / 60.0), delta=0.05)
+        self.assertEqual(leader.current_wp_idx, 0)
+
+        # Step 30 frames (0.5s)
+        for _ in range(30):
+            sim.step()
+
+        self.assertTrue(leader.wp_loitering)
+        self.assertAlmostEqual(leader.wp_loiter_timer, 1.0, delta=0.1)
+        self.assertEqual(leader.current_wp_idx, 0)
+
+        # Step remaining 70 frames (> 1.1s)
+        for _ in range(70):
+            sim.step()
+
+        # Loiter elapsed: leader advances to WP 1
+        self.assertFalse(leader.wp_loitering)
+        self.assertEqual(leader.current_wp_idx, 1)
+        np.testing.assert_allclose(leader.acknowledged_target, [35.0, 15.0, 25.0])
+
+    def test_dict_format_4d_waypoints(self):
+        """Routes defined with dict objects {x, y, z, loiter} are parsed and executed identically."""
+        sim = SwarmSimulator(drone_count=4)
+        dict_wps = [
+            {"x": 25.0, "y": 10.0, "z": 22.0, "loiter": 2.5},
+            {"x": 40.0, "y": -15.0, "z": 24.0, "loiter": 1.0},
+        ]
+        res = sim.deploy_mission_route(dict_wps, loop=True, name="DICT_ROUTE")
+        self.assertEqual(res.get("status"), "OK")
+        self.assertEqual(len(sim.route_waypoints), 2)
+        np.testing.assert_allclose(sim.route_waypoints[0], [25.0, 10.0, 22.0, 2.5])
+        np.testing.assert_allclose(sim.route_waypoints[1], [40.0, -15.0, 24.0, 1.0])
+
+    def test_formation_stabilization_gate_holds_leader(self):
+        """Leader loitering at waypoint will hold station if escorts are lagging (> 4.0m from slot)."""
+        sim = SwarmSimulator(drone_count=4)
+        wps = [
+            [20.0, 0.0, 20.0, 0.5],   # 0.5s loiter (30 frames)
+            [40.0, 20.0, 25.0, 0.0],
+        ]
+        sim.deploy_mission_route(wps, loop=False, name="GATE_ROUTE")
+        leader = sim.leader
+        leader.pos = np.array([20.0, 0.0, 20.0], dtype=float)
+
+        # Displace escorts far away from slots with mutual separation to prevent prop clash
+        offsets = [
+            np.array([-15.0, 0.0, 0.0], dtype=float),
+            np.array([0.0, -15.0, 0.0], dtype=float),
+            np.array([-15.0, -15.0, 0.0], dtype=float),
+        ]
+        followers = [d for d in sim.drones if not d.is_leader]
+        for f, off in zip(followers, offsets):
+            f.flight_state = "CRUISE"
+            slot = sim.brain._get_formation_slot(f, leader)
+            f.pos = slot + off
+
+        # Step 40 frames (> 0.5s timer)
+        for _ in range(40):
+            sim.step()
+
+        # Timer has run down to 0.0s, but escorts are NOT settled -> leader holds at WP 0
+        self.assertEqual(leader.wp_loiter_timer, 0.0)
+        self.assertTrue(leader.wp_loitering)
+        self.assertEqual(leader.current_wp_idx, 0)
+
+        # Now snap escorts to their assigned slots
+        for f in followers:
+            slot = sim.brain._get_formation_slot(f, leader)
+            f.pos = np.copy(slot)
+
+        # Step 1 frame
+        sim.step()
+
+        # Escorts settled: gate clears and leader advances to WP 1
+        self.assertFalse(leader.wp_loitering)
+        self.assertEqual(leader.current_wp_idx, 1)
+
+    def test_snapshot_telemetry_includes_loiter_fields(self):
+        """State snapshot correctly exports loitering boolean and real-time loiter_timer."""
+        sim = SwarmSimulator(drone_count=4)
+        sim.start_route_preset("BOX_PATROL")
+        snapshot = sim.get_state_snapshot()
+        route = snapshot["mission_route"]
+        self.assertIn("loitering", route)
+        self.assertIn("loiter_timer", route)
+        self.assertIsInstance(route["loitering"], bool)
+        self.assertIsInstance(route["loiter_timer"], float)
 
 
 if __name__ == "__main__":

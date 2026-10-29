@@ -376,7 +376,11 @@
             const totalWps = (routeData.waypoints ? routeData.waypoints.length : 0);
             if (routeActiveBadge) {
                 routeActiveBadge.className = 'badge-route-active';
-                routeActiveBadge.textContent = `${routeData.name} [${currentIdx}/${totalWps}]`;
+                if (routeData.loitering && routeData.loiter_timer > 0) {
+                    routeActiveBadge.textContent = `${routeData.name} [WP ${currentIdx}/${totalWps} (LOITER ${Number(routeData.loiter_timer).toFixed(1)}s)]`;
+                } else {
+                    routeActiveBadge.textContent = `${routeData.name} [${currentIdx}/${totalWps}]`;
+                }
             }
             if (btnStopRoute) btnStopRoute.style.display = 'block';
 

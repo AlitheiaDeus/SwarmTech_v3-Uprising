@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/WebGL-Three.js_r128-00F0FF?logo=three.js&logoColor=white" alt="Three.js">
   <img src="https://img.shields.io/badge/Architecture-4--Airgap_Decoupled-00FFAA" alt="4-Airgap Decoupled">
   <img src="https://img.shields.io/badge/Physics-60_FPS_Kinematic_Twin-FFB800" alt="60 FPS">
-  <img src="https://img.shields.io/badge/Tests-113%2F113_Passing-brightgreen" alt="Tests 113/113 Passing">
+  <img src="https://img.shields.io/badge/Tests-117%2F117_Passing-brightgreen" alt="Tests 117/117 Passing">
   <img src="https://img.shields.io/badge/License-MIT-gray" alt="MIT License">
 </p>
 
@@ -133,7 +133,7 @@ python -m unittest discover tests
 ```
 
 ```text
-Ran 113 tests in 5.466s
+Ran 117 tests in 5.394s
 
 OK
 ```

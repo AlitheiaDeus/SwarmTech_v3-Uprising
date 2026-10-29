@@ -82,11 +82,13 @@ class Drone:
             np.array(pos, dtype=float) if pos is not None else np.array([60.0, 40.0, 30.0], dtype=float)
         )
 
-        # Discrete Waypoint Mission Queue (TKT-28)
+        # Discrete Waypoint Mission Queue & Loiter Timers (TKT-28 & TKT-30)
         self.mission_waypoints: List[np.ndarray] = []
         self.current_wp_idx: int = 0
         self.mission_active: bool = False
         self.mission_loop: bool = True
+        self.wp_loiter_timer: float = 0.0
+        self.wp_loitering: bool = False
 
     def reset_state(
         self,
@@ -129,6 +131,8 @@ class Drone:
         self.current_wp_idx = 0
         self.mission_active = False
         self.mission_loop = True
+        self.wp_loiter_timer = 0.0
+        self.wp_loitering = False
 
     @property
     def target_reached(self) -> bool:
@@ -172,5 +176,7 @@ class Drone:
             "mission_active": self.mission_active,
             "current_wp_idx": self.current_wp_idx,
             "wp_count": len(self.mission_waypoints),
+            "wp_loiter_timer": round(float(self.wp_loiter_timer), 2),
+            "wp_loitering": self.wp_loitering,
             "target_reached": self.target_reached,
         }
