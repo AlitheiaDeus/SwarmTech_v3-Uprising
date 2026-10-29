@@ -10,8 +10,12 @@
   <img src="https://img.shields.io/badge/WebGL-Three.js_r128-00F0FF?logo=three.js&logoColor=white" alt="Three.js">
   <img src="https://img.shields.io/badge/Architecture-4--Airgap_Decoupled-00FFAA" alt="4-Airgap Decoupled">
   <img src="https://img.shields.io/badge/Physics-60_FPS_Kinematic_Twin-FFB800" alt="60 FPS">
-  <img src="https://img.shields.io/badge/Tests-96%2F96_Passing-brightgreen" alt="Tests 96/96 Passing">
+  <img src="https://img.shields.io/badge/Tests-108%2F108_Passing-brightgreen" alt="Tests 108/108 Passing">
   <img src="https://img.shields.io/badge/License-MIT-gray" alt="MIT License">
+</p>
+
+<p align="center">
+  <img src="docs/images/tactical_gcs_hero.png" alt="SwarmTech3 Tactical Ground Control Station (GCS) Viewport" width="100%">
 </p>
 
 ---

@@ -16,6 +16,11 @@
   --neon-emerald: #00FFAA;
   --neon-amber: #FFB800;
   --neon-red: #FF3366;
+  --neon-magenta: #FF00EA;
+  --neon-magenta-glow: rgba(255, 0, 234, 0.5);
+  --border-magenta: rgba(255, 0, 234, 0.4);
+  --bg-magenta: rgba(255, 0, 234, 0.05);
+  --bg-magenta-hover: rgba(255, 0, 234, 0.22);
   --text-primary: #D4F4FF;
   --text-muted: #5A7E96;
 }
@@ -632,23 +637,27 @@ html, body {
 }
 
 .btn-kill {
-  border: 1px solid rgba(255, 51, 102, 0.4);
-  color: var(--neon-red);
+  border: 1px solid rgba(255, 0, 234, 0.5);
+  color: var(--neon-magenta);
 }
 
 .btn-kill:hover {
-  background: rgba(255, 51, 102, 0.2);
-  box-shadow: 0 0 6px var(--neon-red);
+  background: var(--bg-magenta-hover);
+  border-color: #FFFFFF;
+  color: #FFFFFF;
+  box-shadow: 0 0 8px var(--neon-magenta);
 }
 
 .btn-reboot {
-  border: 1px solid rgba(0, 255, 170, 0.4);
-  color: var(--neon-emerald);
+  border: 1px solid rgba(255, 0, 234, 0.5);
+  color: #FF80F5;
 }
 
 .btn-reboot:hover {
-  background: rgba(0, 255, 170, 0.2);
-  box-shadow: 0 0 6px var(--neon-emerald);
+  background: var(--bg-magenta-hover);
+  border-color: #FFFFFF;
+  color: #FFFFFF;
+  box-shadow: 0 0 8px var(--neon-magenta);
 }
 
 .btn-land {
@@ -1110,98 +1119,154 @@ html, body {
   100% { box-shadow: 0 0 16px rgba(0, 255, 170, 0.8); }
 }
 
+/* ==============================================================================
+   SITL Sim Lab & God-View Fault Injection (Magenta Visual Taxonomy)
+   Distinguishes non-operator fault-injection tools from standard GCS operations.
+   ============================================================================== */
+.badge-sim-tag {
+  display: inline-block;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.8px;
+  padding: 1px 6px;
+  border-radius: 2px;
+  background: rgba(255, 0, 234, 0.25) !important;
+  border: 1px solid var(--neon-magenta) !important;
+  color: #FFFFFF !important;
+  text-shadow: 0 0 6px var(--neon-magenta) !important;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.sim-lab-group,
 .danger-group {
   border-bottom: none;
-  background: rgba(255, 51, 102, 0.04);
+  background: rgba(255, 0, 234, 0.06) !important;
   padding: 10px;
   border-radius: 3px;
-  border: 1px solid rgba(255, 51, 102, 0.2);
+  border: 1px solid var(--neon-magenta) !important;
+  box-shadow: 0 0 10px rgba(255, 0, 234, 0.2), inset 0 0 14px rgba(255, 0, 234, 0.06) !important;
 }
 
-.danger-title {
-  color: var(--neon-red);
+.sim-lab-title,
+.danger-title,
+.sim-lab-group .group-title {
+  color: var(--neon-magenta) !important;
+  display: flex;
+  align-items: center;
+  font-weight: 700;
+  text-shadow: 0 0 8px rgba(255, 0, 234, 0.6) !important;
 }
 
+.sim-lab-group .tactical-btn,
+.btn-sim-lab,
 .btn-danger {
-  border-color: rgba(255, 51, 102, 0.4);
-  color: var(--neon-red);
+  border: 1px solid rgba(255, 0, 234, 0.55) !important;
+  color: var(--neon-magenta) !important;
+  background: rgba(255, 0, 234, 0.08) !important;
+  box-shadow: 0 0 6px rgba(255, 0, 234, 0.12);
 }
 
+.sim-lab-group .tactical-btn:hover,
+.btn-sim-lab:hover,
 .btn-danger:hover {
-  background: rgba(255, 51, 102, 0.25);
-  border-color: var(--neon-red);
-  box-shadow: 0 0 10px rgba(255, 51, 102, 0.5);
+  background: rgba(255, 0, 234, 0.25) !important;
+  border-color: #FFFFFF !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 0 14px var(--neon-magenta) !important;
 }
 
-.btn-success {
-  border-color: rgba(0, 255, 170, 0.4);
-  color: var(--neon-emerald);
+.sim-lab-group .btn-sim-lab-outline,
+.sim-lab-group .btn-salvage {
+  margin-top: 8px;
+  width: 100%;
+  border-color: rgba(255, 0, 234, 0.45) !important;
+  color: #FF80F5 !important;
+  background: rgba(255, 0, 234, 0.06) !important;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
 }
 
-.btn-success:hover {
-  background: rgba(0, 255, 170, 0.2);
-  border-color: var(--neon-emerald);
-  box-shadow: 0 0 10px rgba(0, 255, 170, 0.5);
+.sim-lab-group .btn-sim-lab-outline:hover,
+.sim-lab-group .btn-salvage:hover {
+  background: rgba(255, 0, 234, 0.25) !important;
+  border-color: var(--neon-magenta) !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 0 14px var(--neon-magenta) !important;
+}
+
+.sim-lab-group .btn-sim-lab-reinforce,
+.sim-lab-group .btn-reinforce {
+  margin-top: 8px;
+  width: 100%;
+  border-color: rgba(255, 0, 234, 0.6) !important;
+  color: #FFB3F8 !important;
+  background: rgba(255, 0, 234, 0.1) !important;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+}
+
+.sim-lab-group .btn-sim-lab-reinforce:hover,
+.sim-lab-group .btn-reinforce:hover {
+  background: rgba(255, 0, 234, 0.35) !important;
+  border-color: #FFFFFF !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 0 16px var(--neon-magenta) !important;
+}
+
+.sim-lab-group .btn-sim-lab-full-reset,
+.sim-lab-group .btn-full-reset {
+  margin-top: 8px;
+  width: 100%;
+  border-color: rgba(255, 0, 234, 0.4) !important;
+  color: var(--neon-magenta) !important;
+  background: rgba(255, 0, 234, 0.05) !important;
+  font-size: 9px;
+  letter-spacing: 0.8px;
+}
+
+.sim-lab-group .btn-sim-lab-full-reset:hover,
+.sim-lab-group .btn-full-reset:hover {
+  background: rgba(255, 0, 234, 0.25) !important;
+  border-color: #FFFFFF !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 0 12px var(--neon-magenta) !important;
 }
 
 .btn-respawn {
-  border-color: rgba(0, 255, 170, 0.6);
-  color: var(--neon-emerald);
-  background: rgba(0, 255, 170, 0.08);
+  border-color: rgba(255, 0, 234, 0.6) !important;
+  color: #FF80F5 !important;
+  background: rgba(255, 0, 234, 0.08) !important;
 }
 
 .btn-respawn:hover {
-  background: rgba(0, 255, 170, 0.25);
-  border-color: var(--neon-emerald);
-  box-shadow: 0 0 12px rgba(0, 255, 170, 0.6);
+  background: rgba(255, 0, 234, 0.25) !important;
+  border-color: #FFFFFF !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 0 12px var(--neon-magenta) !important;
 }
 
-.btn-salvage {
-  margin-top: 8px;
-  width: 100%;
-  border-color: rgba(255, 120, 60, 0.5);
-  color: #FFAA77;
-  background: rgba(255, 100, 40, 0.08);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-  box-shadow: 0 0 8px rgba(255, 100, 40, 0.15);
+/* Magenta RF EW Injection styling */
+.rf-group.sim-lab-group {
+  border-left: 3px solid var(--neon-magenta) !important;
+  background: rgba(255, 0, 234, 0.04) !important;
 }
 
-.btn-salvage:hover {
-  background: rgba(255, 100, 40, 0.25);
-  border-color: #FFAA77;
-  color: #FFFFFF;
-  box-shadow: 0 0 14px rgba(255, 100, 40, 0.5);
+.rf-title.sim-lab-title {
+  color: var(--neon-magenta) !important;
+  text-shadow: 0 0 8px rgba(255, 0, 234, 0.5) !important;
 }
 
-.btn-reinforce {
-  margin-top: 8px;
-  width: 100%;
-  border-color: rgba(0, 255, 170, 0.7);
-  color: var(--neon-emerald);
-  background: rgba(0, 255, 170, 0.12);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.8px;
-  box-shadow: 0 0 8px rgba(0, 255, 170, 0.2);
+.tactical-slider.slider-magenta::-webkit-slider-thumb {
+  background: var(--neon-magenta) !important;
+  box-shadow: 0 0 10px var(--neon-magenta) !important;
 }
 
-.btn-reinforce:hover {
-  background: rgba(0, 255, 170, 0.3);
-  border-color: #FFFFFF;
-  color: #FFFFFF;
-  box-shadow: 0 0 16px rgba(0, 255, 170, 0.7);
-}
-
-.btn-full-reset {
-  margin-top: 8px;
-  width: 100%;
-  border-color: rgba(255, 184, 0, 0.35);
-  color: var(--neon-amber);
-  background: rgba(255, 184, 0, 0.05);
-  font-size: 9px;
-  letter-spacing: 0.8px;
+.slider-val.val-magenta {
+  color: var(--neon-magenta) !important;
+  text-shadow: 0 0 6px rgba(255, 0, 234, 0.5) !important;
 }
 
 .btn-full-reset:hover {

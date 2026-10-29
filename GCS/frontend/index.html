@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SwarmTech3_UpRising | Tactical WebGL GCS</title>
   <meta name="description" content="50/50 Autonomous Drone Swarm Simulation and Hardware-Accelerated 3D WebGL Ground Control Station.">
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=2">
   
   <!-- Three.js (r128) & OrbitControls from CDN -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -94,11 +94,11 @@
       </div>
 
       <!-- Section: RF Channel & Electronic Warfare (PLN-03) -->
-      <div class="control-group rf-group">
-        <div class="group-title rf-title">&#x26A1; RF CHANNEL &amp; JAMMING</div>
+      <div class="control-group rf-group sim-lab-group">
+        <div class="group-title rf-title sim-lab-title"><span class="badge-sim-tag">SIM</span> &#x26A1; RF CHANNEL &amp; JAMMING</div>
         <div class="slider-row">
-          <input type="range" id="rf-jamming-slider" min="0" max="50" value="0" step="5" class="tactical-slider">
-          <span id="rf-jamming-val" class="slider-val">0% JAMMING</span>
+          <input type="range" id="rf-jamming-slider" min="0" max="50" value="0" step="5" class="tactical-slider slider-magenta" title="[SITL Sim Lab] Inject electronic warfare radio noise">
+          <span id="rf-jamming-val" class="slider-val val-magenta">0% JAMMING</span>
         </div>
         <div class="rf-stats-row">
           <span>GCS HORIZON: <strong>120m</strong></span>
@@ -172,18 +172,18 @@
         <button id="btn-cancel-rtb" class="tactical-btn btn-cancel-recovery" style="display: none;">&#x2716; CANCEL RECOVERY &amp; RESUME</button>
       </div>
 
-      <!-- Section: Casualty Lab Controls -->
-      <div class="control-group danger-group">
-        <div class="group-title danger-title">&#x26A0; CASUALTY SIMULATION LAB</div>
+      <!-- Section: Casualty Lab Controls (SITL God-View / Sim Lab) -->
+      <div class="control-group sim-lab-group">
+        <div class="group-title sim-lab-title"><span class="badge-sim-tag">SIM LAB</span> &#x26A0; CASUALTY SIMULATION</div>
         <div class="btn-grid-2">
-          <button id="btn-kill-leader" class="tactical-btn btn-danger">&#x26A1; KILL LEADER</button>
-          <button id="btn-cut-tether" class="tactical-btn btn-danger">&#x2702; CUT / JETTISON TETHER</button>
-          <button id="btn-kill-random" class="tactical-btn btn-danger">&#x25BD; KILL ESCORT</button>
-          <button id="btn-respawn-dead" class="tactical-btn btn-respawn">&#x267B; RESPAWN DEAD</button>
+          <button id="btn-kill-leader" class="tactical-btn btn-sim-lab" title="[SITL Sim Lab] Inject motor failure on Flagship">&#x26A1; KILL LEADER</button>
+          <button id="btn-cut-tether" class="tactical-btn btn-sim-lab" title="[SITL Sim Lab] Force physical umbilical severance">&#x2702; CUT / JETTISON TETHER</button>
+          <button id="btn-kill-random" class="tactical-btn btn-sim-lab" title="[SITL Sim Lab] Inject motor failure on random escort">&#x25BD; KILL ESCORT</button>
+          <button id="btn-respawn-dead" class="tactical-btn btn-sim-lab" title="[SITL Sim Lab] Revive dead casualties on ground">&#x267B; RESPAWN DEAD</button>
         </div>
-        <button id="btn-clear-wreckage" class="tactical-btn btn-salvage">&#x232B; CLEAR WRECKAGE</button>
-        <button id="btn-reinforce-swarm" class="tactical-btn btn-reinforce">&#x25B2; + LAUNCH REINFORCEMENT</button>
-        <button id="btn-reboot-fleet" class="tactical-btn btn-full-reset">&#x21BA; FACTORY RESET SWARM</button>
+        <button id="btn-clear-wreckage" class="tactical-btn btn-sim-lab-outline" title="[SITL Sim Lab] Purge destroyed airframes from world">&#x232B; CLEAR WRECKAGE</button>
+        <button id="btn-reinforce-swarm" class="tactical-btn btn-sim-lab-reinforce" title="[SITL Sim Lab] Spawn new airframe at launch pad">&#x25B2; + LAUNCH REINFORCEMENT</button>
+        <button id="btn-reboot-fleet" class="tactical-btn btn-sim-lab-full-reset" title="[SITL Sim Lab] Full simulation factory reset">&#x21BA; FACTORY RESET SWARM</button>
       </div>
 
     </div>

@@ -650,6 +650,7 @@
             card.elRole.textContent = 'DESTROYED';
             card.elActionBtn.textContent = 'REBOOT';
             card.elActionBtn.className = 'card-btn-action btn-reboot';
+            card.elActionBtn.title = '[SITL Sim Lab] Revive crashed airframe';
             if (card.elLandBtn) card.elLandBtn.style.display = 'none';
         } else if (drone.flight_state === 'LANDED') {
             card.el.classList.add('landed-card');
@@ -806,7 +807,7 @@
             </div>
             <div class="card-footer">
                 <button class="card-btn-action btn-land-action btn-land">LAND</button>
-                <button class="card-btn-action btn-kill">KILL</button>
+                <button class="card-btn-action btn-kill" title="[SITL Sim Lab] Inject motor failure on airframe">KILL</button>
             </div>
         `;
 
