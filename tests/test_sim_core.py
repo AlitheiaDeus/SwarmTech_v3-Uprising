@@ -8,9 +8,8 @@ import unittest
 import numpy as np
 import json
 
-from backend.sim_core import (
+from SIM.backend.sitl_engine import (
     SwarmSimulator,
-    Drone,
     DT,
     ZONE4_CLASH,
     ZONE3_OUTER,
@@ -23,6 +22,7 @@ from backend.sim_core import (
     TIER_LEADER,
     TIER_ESCORT,
 )
+from OBC.backend.drone_firmware import Drone
 
 
 class TestSimCore(unittest.TestCase):

@@ -7,8 +7,8 @@ and exclusive mode switching.
 
 import unittest
 import numpy as np
-from backend.sim_core import SwarmSimulator
-from backend.mavlink_bridge import MavlinkBridge
+from SIM.backend.sitl_engine import SwarmSimulator
+from SIM.backend.mavlink_bridge import MavlinkBridge
 
 
 class TestRngRecon(unittest.TestCase):

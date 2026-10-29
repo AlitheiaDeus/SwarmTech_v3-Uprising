@@ -12,7 +12,7 @@ import math
 import unittest
 import numpy as np
 
-from backend.sim_core import SwarmSimulator, ZONE4_CLASH
+from SIM.backend.sitl_engine import SwarmSimulator, ZONE4_CLASH
 
 
 class TestSuccessionDeconfliction(unittest.TestCase):

@@ -9,8 +9,8 @@ import math
 import numpy as np
 import json
 
-from backend.sim_core import SwarmSimulator, DT, A_MAX, ZONE4_CLASH
-from backend.brains import BRAIN_REGISTRY, LeaderFollowerBrain, GossipConsensusBrain
+from SIM.backend.sitl_engine import SwarmSimulator, DT, A_MAX, ZONE4_CLASH
+from OBC.backend.brains import BRAIN_REGISTRY, LeaderFollowerBrain, GossipConsensusBrain
 
 
 class TestBrains(unittest.TestCase):

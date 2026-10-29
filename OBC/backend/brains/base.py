@@ -9,7 +9,8 @@ from typing import Dict, List, Optional, Any, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from backend.sim_core import SwarmSimulator, Drone
+    from SIM.backend.sitl_engine import SwarmSimulator
+    from OBC.backend.drone_firmware import Drone
 
 
 class BaseBrain(ABC):

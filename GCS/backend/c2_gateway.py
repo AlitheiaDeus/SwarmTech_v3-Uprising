@@ -86,7 +86,19 @@ class C2Gateway:
 
     @target_pos.setter
     def target_pos(self, value: Union[List[float], np.ndarray]) -> None:
-        self.set_target(value)
+        self._target_pos = np.array(value, dtype=float)
+        if self.sim:
+            if not getattr(self.sim, "tether_severed", False) and getattr(self.sim, "comms_mode", "") == "TETHERED_RELAY":
+                for d in getattr(self.sim, "drones", []):
+                    if d.is_leader or d.id == 0:
+                        d.acknowledged_target = np.copy(self._target_pos)
+            elif getattr(self.sim, "comms_mode", "") == "LEADER_FOLLOWER":
+                current_leader = getattr(self.sim, "leader", None)
+                if current_leader is not None and not current_leader.crashed:
+                    anchor = getattr(self.sim, "tether_anchor", TETHER_ANCHOR)
+                    d_gcs = float(np.linalg.norm(current_leader.pos - anchor))
+                    if d_gcs <= RADIO_RANGE:
+                        current_leader.acknowledged_target = np.copy(self._target_pos)
 
     def attach_sim(self, sim: Any) -> None:
         """Attach underlying simulation or network bridge interface."""

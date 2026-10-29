@@ -14,9 +14,9 @@ import unittest
 import numpy as np
 from typing import Dict, Any
 
-from backend.sim_core import SwarmSimulator, RADIO_RANGE, TETHER_ANCHOR
-from backend.web_server import SwarmWebServer
-from backend.mavlink_bridge import MavlinkBridge
+from SIM.backend.sitl_engine import SwarmSimulator, RADIO_RANGE, TETHER_ANCHOR
+from GCS.backend.web_server import SwarmWebServer
+from SIM.backend.mavlink_bridge import MavlinkBridge
 
 
 class TestTriModeRF(unittest.TestCase):

@@ -15,7 +15,8 @@ import unittest
 import numpy as np
 import math
 
-from backend.sim_core import SwarmSimulator, Drone, DT, TIER_LEADER, TIER_ESCORT
+from SIM.backend.sitl_engine import SwarmSimulator, DT, TIER_LEADER, TIER_ESCORT
+from OBC.backend.drone_firmware import Drone
 
 
 class TestAutonomousSwarmRTBLanding(unittest.TestCase):

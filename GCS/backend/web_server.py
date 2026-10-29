@@ -16,7 +16,7 @@ import time
 from typing import Dict, List, Optional, Set, Any
 
 # Ensure repository root is on sys.path even when executed directly via file path
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
@@ -40,17 +40,9 @@ if sys.platform == "win32":
 
 from aiohttp import web, WSMsgType
 
-try:
-    from SIM.backend.sitl_engine import SwarmSimulator, DT
-    from SIM.backend.mavlink_bridge import MavlinkBridge
-except ImportError:
-    from backend.sim_core import SwarmSimulator, DT
-    from backend.mavlink_bridge import MavlinkBridge
-
-try:
-    from GCS.backend.session_manager import SessionManager
-except ImportError:
-    from backend.session_manager import SessionManager
+from SIM.backend.sitl_engine import SwarmSimulator, DT
+from SIM.backend.mavlink_bridge import MavlinkBridge
+from GCS.backend.session_manager import SessionManager
 
 logger = logging.getLogger("SwarmWebServer")
 

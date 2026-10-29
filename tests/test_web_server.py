@@ -9,8 +9,8 @@ import json
 import unittest
 from aiohttp import ClientSession, WSMsgType
 
-from backend.sim_core import SwarmSimulator
-from backend.web_server import SwarmWebServer
+from SIM.backend.sitl_engine import SwarmSimulator
+from GCS.backend.web_server import SwarmWebServer
 
 
 class TestWebServer(unittest.IsolatedAsyncioTestCase):

@@ -9,8 +9,15 @@ from __future__ import annotations
 import json
 import math
 import socket
+import sys
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
+
+# Ensure repository root is on sys.path
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 try:
     from pymavlink.dialects.v20 import common as mavlink2
@@ -18,11 +25,8 @@ try:
 except ImportError:
     HAVE_PYMAVLINK = False
 
-try:
-    from SIM.backend.sitl_engine import SwarmSimulator
-    from OBC.backend.drone_firmware import Drone
-except ImportError:
-    from backend.sim_core import SwarmSimulator, Drone
+from SIM.backend.sitl_engine import SwarmSimulator
+from OBC.backend.drone_firmware import Drone
 
 
 # ==============================================================================

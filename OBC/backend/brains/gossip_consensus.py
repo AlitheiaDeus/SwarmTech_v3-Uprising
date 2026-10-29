@@ -10,13 +10,11 @@ import math
 from typing import Dict, List, Optional, Set, Any, TYPE_CHECKING
 import numpy as np
 
-try:
-    from .base import BaseBrain
-except ImportError:
-    from backend.brains.base import BaseBrain
+from .base import BaseBrain
 
 if TYPE_CHECKING:
-    from backend.sim_core import SwarmSimulator, Drone
+    from SIM.backend.sitl_engine import SwarmSimulator
+    from OBC.backend.drone_firmware import Drone
 
 RADIO_RANGE: float = 120.0
 HEARTBEAT_INTERVAL: float = 0.1

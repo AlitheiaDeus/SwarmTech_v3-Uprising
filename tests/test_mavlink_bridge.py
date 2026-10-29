@@ -10,8 +10,8 @@ import unittest
 import time
 import numpy as np
 
-from backend.sim_core import SwarmSimulator
-from backend.mavlink_bridge import MavlinkBridge, HAVE_PYMAVLINK
+from SIM.backend.sitl_engine import SwarmSimulator
+from SIM.backend.mavlink_bridge import MavlinkBridge, HAVE_PYMAVLINK
 
 if HAVE_PYMAVLINK:
     from pymavlink.dialects.v20 import common as mavlink2

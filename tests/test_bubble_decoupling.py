@@ -4,7 +4,7 @@ Validates the structural airgaps across GCS (Bubble 1), OBC (Bubble 2), and SIM 
   1. GCS Bubble: C2Gateway and discrete route presets can run independently.
   2. OBC Bubble: Drone firmware maintains isolated onboard targets and mission queues.
   3. SIM Bubble: SITLWorldEngine simulates ground truth physics and channel dynamics.
-  4. Backward Compatibility: Legacy facades re-export identical instances across all airgaps.
+  4. Cross-Layer Contracts: Clean delegation from SITL engine to GCS C2 gateway.
 """
 
 from __future__ import annotations
@@ -16,10 +16,6 @@ if str(_REPO_ROOT) not in sys.path:
 
 import unittest
 import numpy as np
-
-# Legacy Facade (Imported first to verify root backend package resolution)
-import backend.sim_core as legacy_sim
-import backend.brains as legacy_brains
 
 # Bubble 1: GCS
 from GCS.backend.c2_gateway import C2Gateway, ROUTE_PRESETS
@@ -104,22 +100,25 @@ class TestBubbleDecoupling(unittest.TestCase):
         self.assertIn("tether", snapshot)
         self.assertEqual(len(snapshot["drones"]), 4)
 
-    def test_backward_compatibility_facade_identities(self):
-        """Verify legacy backend.sim_core exports identical types and constants."""
-        # Class and type identity checks
-        self.assertIs(legacy_sim.Drone, Drone)
-        self.assertIs(legacy_sim.SwarmSimulator, SITLWorldEngine)
-        self.assertIs(legacy_sim.SITLWorldEngine, SITLWorldEngine)
-        self.assertIs(legacy_sim.C2Gateway, C2Gateway)
-        self.assertIs(legacy_brains.LeaderFollowerBrain, LeaderFollowerBrain)
-        self.assertIs(legacy_brains.GossipConsensusBrain, GossipConsensusBrain)
-        self.assertIs(legacy_brains.BaseBrain, BaseBrain)
+    def test_bubble_cross_layer_contracts(self):
+        """Verify decoupled bubble exports, type contracts, and C2 gateway delegation."""
+        engine = SITLWorldEngine(drone_count=4, seed=42)
+        # Class and type alias checks
+        self.assertIs(SITLSwarmSim, SITLWorldEngine)
+        self.assertIsInstance(engine.c2, C2Gateway)
+        self.assertIs(engine.c2.sim, engine)
 
-        # Constant identity checks
-        self.assertEqual(legacy_sim.DT, DT)
-        self.assertEqual(legacy_sim.ZONE4_CLASH, ZONE4_CLASH)
-        self.assertEqual(legacy_sim.RADIO_RANGE, RADIO_RANGE)
-        np.testing.assert_allclose(legacy_sim.TETHER_ANCHOR, TETHER_ANCHOR)
+        # Delegated properties
+        np.testing.assert_allclose(engine.target_pos, engine.c2.target_pos)
+        self.assertEqual(engine.route_active, engine.c2.route_active)
+        self.assertEqual(engine.patrol_active, engine.c2.patrol_active)
+        self.assertEqual(engine.rng_recon_active, engine.c2.rng_recon_active)
+
+        # Brain registry checks
+        self.assertIn("LEADER_FOLLOWER", BRAIN_REGISTRY)
+        self.assertIn("GOSSIP_CONSENSUS", BRAIN_REGISTRY)
+        self.assertIs(BRAIN_REGISTRY["LEADER_FOLLOWER"], LeaderFollowerBrain)
+        self.assertIs(BRAIN_REGISTRY["GOSSIP_CONSENSUS"], GossipConsensusBrain)
 
 
 if __name__ == "__main__":

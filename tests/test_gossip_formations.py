@@ -11,7 +11,7 @@ Verifies TKT-11:
 import unittest
 import math
 import numpy as np
-from backend.sim_core import SwarmSimulator, ZONE4_CLASH
+from SIM.backend.sitl_engine import SwarmSimulator, ZONE4_CLASH
 
 
 class TestGossipFormations(unittest.TestCase):

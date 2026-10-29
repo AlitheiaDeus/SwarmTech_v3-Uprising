@@ -7,7 +7,7 @@ tether-severance abort hierarchy, manual interrupt, and leadership succession in
 import unittest
 import numpy as np
 
-from backend.sim_core import SwarmSimulator, ROUTE_PRESETS
+from SIM.backend.sitl_engine import SwarmSimulator, ROUTE_PRESETS
 
 
 class TestMissionRoutes(unittest.TestCase):

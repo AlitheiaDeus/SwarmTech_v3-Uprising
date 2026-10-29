@@ -5,7 +5,7 @@ Unit tests for TKT-16: Tether Failsafes: Breakaway Dive, Cable Jettison, Escort 
 import unittest
 import numpy as np
 
-from backend.sim_core import SwarmSimulator, ZONE4_CLASH, V_CRUISE
+from SIM.backend.sitl_engine import SwarmSimulator, ZONE4_CLASH, V_CRUISE
 
 
 class TestTetherFailsafes(unittest.TestCase):
