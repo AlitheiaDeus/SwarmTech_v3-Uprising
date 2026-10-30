@@ -518,7 +518,7 @@ class SITLWorldEngine:
                 self.lost_link_loiter_timer = max(0.0, self.lost_link_loiter_timer - dt)
                 if self.lost_link_loiter_timer <= 0.0:
                     # Loiter grace period expired: automated return to base (Stage 1 Overhead Marshal)
-                    self.command_rtb_hold()
+                    self.command_rtb_hold(force_autonomous=True)
 
         # 0c. Advance Drone Breakaway Jettison State Machine (TKT-16 / TKT-27)
         for drone in self.drones:
@@ -1266,10 +1266,26 @@ class SITLWorldEngine:
         pad_y = float(-6.0 - (pad_idx // 4) * 3.0)
         return np.array([pad_x, pad_y, 0.5], dtype=float)
 
-    def command_rtb_hold(self) -> None:
+    def is_in_comms_range(self) -> bool:
+        """Check whether at least one living drone is within the GCS 120m RF radio horizon."""
+        living = [d for d in self.drones if not d.crashed]
+        if not living:
+            return False
+        min_dist = min(float(np.linalg.norm(d.pos - self.tether_anchor)) for d in living)
+        return min_dist <= RADIO_RANGE
+
+    def command_rtb_hold(self, force_autonomous: bool = False) -> Dict[str, Any]:
         """Stage 1 Recovery: Commanded RTB (Hold).
         Fleet transits to Base (0, 0, 25m) at cruise speed and settles into
-        a stationary sentry ring at Z=20-25m outside 3m tether clearance cylinder."""
+        a stationary sentry ring at Z=20-25m outside 3m tether clearance cylinder.
+        Enforces 120m Radio Horizon Airgap: dropped if fleet is outside comms range."""
+        if not force_autonomous and not self.is_in_comms_range():
+            return {
+                "status": "DROPPED",
+                "reason": "OUT_OF_RANGE",
+                "error": f"Fleet is beyond GCS radio horizon ({RADIO_RANGE}m). RTB command dropped.",
+            }
+
         self.overhead_marshal_active = True
         self.swarm_rtb_active = True
         self.recovery_stage = "OVERHEAD_MARSHAL"
@@ -1279,6 +1295,7 @@ class SITLWorldEngine:
             if not drone.crashed and drone.flight_state not in ("LANDED", "DESCENDING"):
                 drone.flight_state = "OVERHEAD_HOLD"
                 drone.status = "OVERHEAD_HOLD"
+        return {"status": "OK", "recovery_stage": self.recovery_stage}
 
     def cancel_rtb(self) -> None:
         """Cancel RTB / overhead marshaling and return living airborne drones to mission cruise."""
@@ -1293,10 +1310,18 @@ class SITLWorldEngine:
                 drone.flight_state = "CRUISE"
                 drone.status = "FLEET_LEADER" if drone.is_leader else "ACTIVE"
 
-    def command_land_swarm(self) -> List[int]:
+    def command_land_swarm(self) -> Union[List[int], Dict[str, Any]]:
         """Stage 2 Recovery: Operator-authorized coordinated landing.
         Engages ATC pad reservation and sequential staggered descent
-        (2.0s clearance intervals to eliminate prop wash down-drafts)."""
+        (2.0s clearance intervals to eliminate prop wash down-drafts).
+        Enforces 120m Radio Horizon Airgap: dropped if fleet is outside comms range."""
+        if not self.is_in_comms_range():
+            return {
+                "status": "DROPPED",
+                "reason": "OUT_OF_RANGE",
+                "error": f"Fleet is beyond GCS radio horizon ({RADIO_RANGE}m). Landing command dropped.",
+            }
+
         airborne_drones = [
             d for d in self.drones
             if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING")
@@ -1386,13 +1411,25 @@ class SITLWorldEngine:
         drone.acc = np.zeros(3, dtype=float)
         drone.rotor_rpm = 5200.0
 
-        # Prime LKP and heartbeat timestamp with current leader position
+        # Prime LKP and heartbeat timestamp with current leader position if in comms range
         current_leader = self.leader
         if current_leader is not None:
-            drone.lkp = np.copy(current_leader.pos)
+            dist_to_leader = float(np.linalg.norm(spawn_pos - current_leader.pos))
+            if dist_to_leader <= RADIO_RANGE:
+                drone.lkp = np.copy(current_leader.pos)
+                drone.last_heartbeat_time = self.sim_time
+                drone.lost_link = False
+            else:
+                # Leader is outside radio range of base pad: muster at local base station (TKT-41 & FIX-04)
+                drone.lkp = np.array([0.0, 0.0, 20.0], dtype=float)
+                drone.last_heartbeat_time = -100.0  # Timed out from start
+                drone.lost_link = True
+                drone.status = "LOST_LINK"
         else:
-            drone.lkp = np.copy(self.target_pos)
-        drone.last_heartbeat_time = self.sim_time
+            drone.lkp = np.array([0.0, 0.0, 20.0], dtype=float)
+            drone.last_heartbeat_time = -100.0
+            drone.lost_link = True
+            drone.status = "LOST_LINK"
 
         self.drones.append(drone)
 

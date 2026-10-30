@@ -343,7 +343,14 @@ class SwarmWebServer:
             return {"status": "OK", "cmd": cmd, "drone_count": len(self.sim.drones)}
 
         elif cmd in ("RTB_HOLD", "COMMAND_RTB_HOLD", "RETURN_TO_BASE_HOLD", "RTB"):
-            self.sim.command_rtb_hold()
+            res = self.sim.command_rtb_hold()
+            if isinstance(res, dict) and res.get("status") == "DROPPED":
+                return {
+                    "status": "DROPPED",
+                    "cmd": cmd,
+                    "reason": res.get("reason", "OUT_OF_RANGE"),
+                    "error": res.get("error", "Link inactive or out of range"),
+                }
             self.session_manager.add_event("RTB", "Initiating Stage 1: Swarm RTB to overhead sentry hold (0,0,25)", sim_time=self.sim.sim_time)
             return {
                 "status": "OK",
@@ -363,7 +370,15 @@ class SwarmWebServer:
             }
 
         elif cmd in ("LAND_SWARM", "COMMAND_LAND_SWARM", "LAND_ALL"):
-            queued = self.sim.command_land_swarm()
+            res = self.sim.command_land_swarm()
+            if isinstance(res, dict) and res.get("status") == "DROPPED":
+                return {
+                    "status": "DROPPED",
+                    "cmd": cmd,
+                    "reason": res.get("reason", "OUT_OF_RANGE"),
+                    "error": res.get("error", "Link inactive or out of range"),
+                }
+            queued = res if isinstance(res, list) else []
             self.session_manager.add_event("ATC", f"Engaging Stage 2: Swarm ATC landing pad allocation for {len(queued)} drone(s)", sim_time=self.sim.sim_time)
             return {
                 "status": "OK",

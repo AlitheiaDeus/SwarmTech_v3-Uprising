@@ -185,6 +185,47 @@ class TestGossipFormations(unittest.TestCase):
             self.assertAlmostEqual(d_base_xy, 20.0, delta=4.0)
             self.assertAlmostEqual(d.pos[2], 25.0, delta=3.0)
 
+    def test_gossip_echelon_asymmetric_pinwheel_stability(self):
+        """Verify FIX-04: Asymmetric drone counts (6 drones, off-balance wings) do NOT pinwheel spin."""
+        sim = SwarmSimulator(drone_count=6)
+        sim.set_comms_mode("GOSSIP_CONSENSUS")
+        sim.set_formation("ECHELON_ESCORT")
+        target = np.array([30.0, 30.0, 25.0], dtype=float)
+        sim.set_target(list(target))
+
+        # Cruise to target and settle (300 steps = 5.0s)
+        for _ in range(300):
+            sim.step()
+
+        heading_at_arrival = sim.brain.formation_heading
+
+        # Step another 180 frames (3.0s) while stationary/hovering at target
+        for _ in range(180):
+            sim.step()
+
+        heading_after_hover = sim.brain.formation_heading
+        heading_drift = abs((heading_after_hover - heading_at_arrival + math.pi) % (2.0 * math.pi) - math.pi)
+
+        # Heading must be solidly locked/frozen, NOT continuously rotating like a pinwheel
+        self.assertLess(
+            heading_drift,
+            0.15,
+            f"Formation heading pinwheeled by {math.degrees(heading_drift):.1f} deg while off-balance!"
+        )
+
+        # Trigger a casualty on one wing to make it even more off-balance
+        sim.kill_drone(1)
+        for _ in range(120):
+            sim.step()
+
+        heading_after_casualty = sim.brain.formation_heading
+        casualty_drift = abs((heading_after_casualty - heading_after_hover + math.pi) % (2.0 * math.pi) - math.pi)
+        self.assertLess(
+            casualty_drift,
+            0.25,
+            f"Casualty triggered pinwheel spin: drifted by {math.degrees(casualty_drift):.1f} deg"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

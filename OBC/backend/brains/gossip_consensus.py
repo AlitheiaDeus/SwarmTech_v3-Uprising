@@ -320,18 +320,37 @@ class GossipConsensusBrain(BaseBrain):
         return accs
 
     def _update_formation_heading(self, active_drones: List[Drone], target_pos: np.ndarray, dt: float) -> None:
-        """Update virtual swarm heading vector toward consensus target with smooth slew."""
+        """Update virtual swarm heading vector toward consensus target with smooth slew.
+        Uses mean consensus flight velocity and apex-target vector to eliminate
+        pinwheel spinning when wing airframe counts are asymmetric/off-balance."""
         if not active_drones:
             return
-        centroid = np.mean([d.pos for d in active_drones], axis=0)
-        target_vec = target_pos - centroid
-        dist_xy = float(np.linalg.norm(target_vec[:2]))
+
+        # Cruising velocity of the swarm
+        mean_vel = np.mean([d.vel for d in active_drones], axis=0)
+        speed_xy = float(math.hypot(mean_vel[0], mean_vel[1]))
+
+        # Apex drone (slot k=0 in sorted IDs) position as geometric reference (unbiased by wings)
+        sorted_drones = sorted(active_drones, key=lambda d: d.id)
+        apex_drone = sorted_drones[0]
+        to_target = target_pos - apex_drone.pos
+        dist_to_target = float(math.hypot(to_target[0], to_target[1]))
 
         patrol_active = getattr(self.sim, "patrol_active", False)
-        if not patrol_active and dist_xy < 2.0:
-            return  # Settle heading upon arrival
 
-        desired_yaw = math.atan2(target_vec[1], target_vec[0])
+        # Anti-jitter freeze: when swarm is settling, hovering near target, or decelerating
+        # Freeze heading at last stable cruising angle to prevent asymmetric wing pinwheel spin!
+        if not patrol_active and (speed_xy < 1.0 or dist_to_target < 2.5):
+            return
+
+        # Target heading: follow flight velocity vector during cruise, or apex-to-target when starting
+        if speed_xy >= 1.0:
+            desired_yaw = math.atan2(mean_vel[1], mean_vel[0])
+        elif dist_to_target >= 2.5:
+            desired_yaw = math.atan2(to_target[1], to_target[0])
+        else:
+            return
+
         if not self.heading_initialized:
             self.formation_heading = desired_yaw
             self.heading_initialized = True

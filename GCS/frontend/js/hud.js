@@ -979,12 +979,22 @@
     }
 
     function onCommandAck(ack) {
-        if (ack && ack.cmd) {
-            if (ack.cmd === 'CLEAR_WRECKAGE' && Array.isArray(ack.purged_ids)) {
-                logEvent('ACK', `Salvage complete: Cleared ${ack.count} wreckage [${ack.purged_ids.join(', ')}]. Remaining: ${ack.remaining_drones}.`);
-            } else {
-                logEvent('ACK', `Command ${ack.cmd} acknowledged: ${JSON.stringify(ack)}`);
+        if (!ack || !ack.cmd) return;
+        if (ack.status === 'OUT_OF_RANGE' || ack.status === 'DROPPED') {
+            logEvent('WARN', `[RF REJECTED] ${ack.cmd}: ${ack.error || ack.reason || 'Fleet outside 120m radio horizon'}`);
+            const failPill = document.getElementById('hud-failsafe-pill');
+            const failText = document.getElementById('hud-failsafe-text');
+            if (failPill && failText) {
+                failPill.classList.remove('hidden');
+                failText.textContent = 'RF LINK OUT OF RANGE (>120m)';
+                setTimeout(() => failPill.classList.add('hidden'), 4000);
             }
+            return;
+        }
+        if (ack.cmd === 'CLEAR_WRECKAGE' && Array.isArray(ack.purged_ids)) {
+            logEvent('ACK', `Salvage complete: Cleared ${ack.count} wreckage [${ack.purged_ids.join(', ')}]. Remaining: ${ack.remaining_drones}.`);
+        } else {
+            logEvent('ACK', `Command ${ack.cmd} acknowledged: ${JSON.stringify(ack)}`);
         }
     }
 

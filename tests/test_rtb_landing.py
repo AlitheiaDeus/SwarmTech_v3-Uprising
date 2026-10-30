@@ -204,6 +204,42 @@ class TestAutonomousSwarmRTBLanding(unittest.TestCase):
         self.assertEqual(sim.recovery_stage, "OVERHEAD_MARSHAL")
         self.assertTrue(np.allclose(sim.target_pos, [0.0, 0.0, 25.0]))
 
+    def test_out_of_horizon_recovery_rejection_and_reinforcement_muster(self):
+        """Verify FIX-04: GCS commands are dropped beyond 120m radio horizon, and reinforcements muster locally."""
+        sim = SwarmSimulator(drone_count=3)
+        sim.comms_mode = "GOSSIP_CONSENSUS"
+
+        # Relocate all drones well beyond 120m radio horizon
+        for drone in sim.drones:
+            drone.pos = np.array([160.0, 0.0, 30.0], dtype=float)
+
+        self.assertFalse(sim.is_link_active(), "Link must be reported inactive when fleet is at 160m (>120m)")
+
+        # 1. RTB command must be dropped over airgap
+        res_rtb = sim.command_rtb_hold()
+        self.assertIsInstance(res_rtb, dict)
+        self.assertEqual(res_rtb.get("status"), "DROPPED")
+        self.assertEqual(res_rtb.get("reason"), "OUT_OF_RANGE")
+        self.assertFalse(sim.overhead_marshal_active, "Overhead marshal must NOT engage when command dropped")
+
+        # 2. LAND_SWARM command must be dropped over airgap
+        res_land = sim.command_land_swarm()
+        self.assertIsInstance(res_land, dict)
+        self.assertEqual(res_land.get("status"), "DROPPED")
+        self.assertEqual(res_land.get("reason"), "OUT_OF_RANGE")
+
+        # 3. Newly launched reinforcement drone cannot peek at distant fleet coordinates
+        new_drone = sim.launch_reinforcement()
+        self.assertIsNotNone(new_drone)
+
+        # Reinforced drone must start in LOST_LINK with base muster coordinates, not leader's 160m pos
+        self.assertTrue(new_drone.lost_link)
+        self.assertEqual(new_drone.status, "LOST_LINK")
+        self.assertTrue(
+            np.allclose(new_drone.lkp, [0.0, 0.0, 20.0]),
+            f"New drone must muster at local base [0, 0, 20], got {new_drone.lkp}"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
