@@ -296,10 +296,13 @@ class LeaderFollowerBrain(BaseBrain):
 
             # 4. Normal active follower formation guidance
             if current_leader is not None:
-                slot_pos = self._get_formation_slot(drone, current_leader)
-                accs[drone.id] = self._steer_toward(
-                    drone.pos, drone.vel, slot_pos, max_speed=V_CRUISE
-                )
+                if self.formation_mode == "NATURAL_FLOCK":
+                    accs[drone.id] = self._compute_boid_acceleration(drone, current_leader)
+                else:
+                    slot_pos = self._get_formation_slot(drone, current_leader)
+                    accs[drone.id] = self._steer_toward(
+                        drone.pos, drone.vel, slot_pos, max_speed=V_CRUISE
+                    )
             else:
                 accs[drone.id] = -drone.vel * 2.0
 
@@ -425,10 +428,131 @@ class LeaderFollowerBrain(BaseBrain):
             )
 
         else:
-            # NATURAL_FLOCK
+            # NATURAL_FLOCK representative station for external inspection
             row = (k + 1) // 2
             side = 1.0 if (k % 2 == 1) else -1.0
-            return leader.pos + np.array([-row * 5.0, side * 5.0, 0.0])
+            return leader.pos + np.array([-row * 6.0, side * 6.0, 0.0])
+
+    def _compute_boid_acceleration(self, drone: Drone, leader: Drone) -> np.ndarray:
+        """Compute true 3D Reynolds boid flocking acceleration (TKT-23).
+        Forces:
+        1. Separation: Inverse-square 3D repulsion (d < 5.0m) + Zone 3 relative-velocity brake (d < 3.5m).
+        2. Alignment: Velocity matching with neighbors and leader (d < 14.0m).
+        3. Cohesion: Attraction toward local flock center of mass (d < 20.0m).
+        4. Goal Migration: Follow the leader's station trailing cushion.
+        5. Vertical Z-Space Staggering & Safety Floor (Z >= 10.0m).
+        6. Tether Clearance: Minimum 3.0m radial clearance around tether umbilical.
+        """
+        active_flock = [
+            d for d in self.sim.drones
+            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING")
+        ]
+
+        # 1. Goal Migration: Escort follows behind leader along formation heading
+        heading = np.array([math.cos(self.formation_heading), math.sin(self.formation_heading), 0.0], dtype=float)
+        target_station = leader.pos - heading * 8.0
+        a_goal = self._steer_toward(drone.pos, drone.vel, target_station, max_speed=V_CRUISE, arrival_radius=8.0)
+
+        # 2. Separation (d < 5.0m)
+        a_sep = np.zeros(3, dtype=float)
+        R_SEP = 5.0
+        for peer in active_flock:
+            if peer.id == drone.id:
+                continue
+            diff = drone.pos - peer.pos
+            d = float(np.linalg.norm(diff))
+            if 0.001 < d < R_SEP:
+                rep_strength = (R_SEP - d) / (d + 0.1)
+                a_sep += (diff / d) * rep_strength * 4.0
+
+                # 3D Z-Space staggering: if horizontally close, push vertically apart to break 2D planes
+                d_xy = float(math.hypot(diff[0], diff[1]))
+                if d_xy < 3.5:
+                    z_sign = 1.0 if diff[2] >= 0.0 else -1.0
+                    a_sep[2] += z_sign * (3.5 - d_xy) * 3.0
+
+                # Zone 3 relative-velocity approach damping (brake incoming momentum)
+                if d < 3.5:
+                    v_rel = drone.vel - peer.vel
+                    closing = float(np.dot(v_rel, diff / d))
+                    if closing < 0:
+                        a_sep += -(diff / d) * closing * 2.5
+
+        # 3. Alignment (d < 14.0m) - velocity matching with flockmates
+        a_align = np.zeros(3, dtype=float)
+        R_ALIGN = 14.0
+        align_weight_sum = 0.0
+        vel_sum = np.zeros(3, dtype=float)
+        for peer in active_flock:
+            if peer.id == drone.id:
+                continue
+            d = float(np.linalg.norm(drone.pos - peer.pos))
+            if d < R_ALIGN:
+                w = 1.0 - (d / R_ALIGN)
+                if peer.is_leader:
+                    w *= 2.0
+                vel_sum += peer.vel * w
+                align_weight_sum += w
+
+        if align_weight_sum > 0:
+            mean_vel = vel_sum / align_weight_sum
+            a_align = (mean_vel - drone.vel) * 1.5
+
+        # 4. Cohesion (d < 20.0m) - group centroid pull
+        a_coh = np.zeros(3, dtype=float)
+        R_COH = 20.0
+        pos_sum = np.zeros(3, dtype=float)
+        coh_count = 0
+        for peer in active_flock:
+            if peer.id == drone.id:
+                continue
+            d = float(np.linalg.norm(drone.pos - peer.pos))
+            if d < R_COH:
+                pos_sum += peer.pos
+                coh_count += 1
+
+        if coh_count > 0:
+            centroid = pos_sum / float(coh_count)
+            offset_cent = centroid - drone.pos
+            d_cent = float(np.linalg.norm(offset_cent))
+            if d_cent > 3.0:
+                a_coh = (offset_cent / d_cent) * min(V_CRUISE, d_cent * 1.2) - drone.vel
+                a_coh *= 0.8
+
+        # 5. Altitude Floor & Ceiling Guard (Anisotropic 3D)
+        a_z_guard = 0.0
+        if drone.pos[2] < 12.0:
+            a_z_guard += max(0.0, (14.0 - drone.pos[2]) * 4.0 - drone.vel[2] * 2.0)
+        elif drone.pos[2] > 40.0:
+            a_z_guard -= max(0.0, (drone.pos[2] - 38.0) * 4.0 + drone.vel[2] * 2.0)
+
+        # 6. Tether Clearance: Repulsion from tether umbilical if active
+        a_tether = np.zeros(3, dtype=float)
+        if getattr(self.sim, "comms_mode", "TETHERED_RELAY") == "TETHERED_RELAY" and not getattr(self.sim, "tether_severed", False):
+            anchor_xy = self.sim.tether_anchor[:2]
+            r_vec = drone.pos[:2] - anchor_xy
+            r_xy = float(np.linalg.norm(r_vec))
+            if r_xy < 4.0:
+                push = (4.0 - r_xy) * 5.0
+                a_tether[:2] = (r_vec / max(0.1, r_xy)) * push
+
+        # Weighted combination of Reynolds boid forces
+        total_acc = (
+            2.0 * a_goal +
+            3.5 * a_sep +
+            1.5 * a_align +
+            1.0 * a_coh +
+            a_tether
+        )
+        total_acc[2] += a_z_guard
+
+        # Clamp to physical motor acceleration limit
+        norm_a = float(np.linalg.norm(total_acc))
+        A_MAX = 15.0
+        if norm_a > A_MAX:
+            total_acc = (total_acc / norm_a) * A_MAX
+
+        return total_acc
 
     @staticmethod
     def _steer_toward(

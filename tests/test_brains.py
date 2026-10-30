@@ -271,6 +271,46 @@ class TestBrains(unittest.TestCase):
         self.assertEqual(snap["comms_mode"], "GOSSIP_CONSENSUS")
         self.assertTrue(snap["brain_telemetry"]["consensus_reached"])
 
+    def test_leader_follower_boids_flocking_murmuration(self):
+        """Verify TKT-23: Leader-Follower escorts execute true 3D Reynolds boid flocking."""
+        self.sim.set_formation("NATURAL_FLOCK")
+        self.sim.target_pos = np.array([50.0, 30.0, 25.0], dtype=float)
+
+        # Step 300 ticks (5.0s)
+        for _ in range(300):
+            self.sim.step()
+
+        active = [d for d in self.sim.drones if not d.crashed]
+        self.assertEqual(len(active), 6)
+
+        # 1. Zero Zone 4 clashes (d > 1.5m) and safe separation (d > 2.5m)
+        for i in range(len(active)):
+            for j in range(i + 1, len(active)):
+                d_ij = float(np.linalg.norm(active[i].pos - active[j].pos))
+                self.assertGreater(d_ij, ZONE4_CLASH, f"Prop clash between #{active[i].id} and #{active[j].id}: {d_ij:.2f}m")
+                self.assertGreater(d_ij, 2.5, f"Followers clumped: {d_ij:.2f}m")
+
+        # 2. Kinematic limits strictly preserved
+        for d in active:
+            speed = float(np.linalg.norm(d.vel))
+            self.assertLessEqual(speed, 20.0, f"Speed exceeded max clamp: {speed:.1f}m/s")
+            self.assertGreaterEqual(d.pos[2], 10.0, f"Altitude breached safety floor: {d.pos[2]:.1f}m")
+
+    def test_boids_3d_z_space_layering(self):
+        """Verify TKT-23: Drones utilize 3D Z-space instead of a flat 2D pancake."""
+        self.sim.set_formation("NATURAL_FLOCK")
+        self.sim.target_pos = np.array([40.0, 40.0, 25.0], dtype=float)
+
+        for _ in range(240):
+            self.sim.step()
+
+        active = [d for d in self.sim.drones if not d.crashed]
+        z_positions = [d.pos[2] for d in active]
+        z_variance = float(np.var(z_positions))
+
+        # Z-positions must exhibit natural vertical spread (> 0.1m^2 variance, ~0.4m+ std dev), proving true 3D flocking
+        self.assertGreater(z_variance, 0.1, f"Swarm flattened into 2D plane: z_var={z_variance:.4f}")
+
 
 if __name__ == "__main__":
     unittest.main()

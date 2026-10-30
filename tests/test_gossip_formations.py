@@ -99,8 +99,8 @@ class TestGossipFormations(unittest.TestCase):
                 d_ij = float(np.linalg.norm(active[i].pos - active[j].pos))
                 self.assertGreater(d_ij, ZONE4_CLASH)
 
-    def test_gossip_natural_flock_lattice(self):
-        """Verify NATURAL_FLOCK distributes drones across a dispersed grid lattice."""
+    def test_gossip_natural_flock_boids_flocking(self):
+        """Verify NATURAL_FLOCK executes true 3D Reynolds boid flocking (TKT-23)."""
         sim = SwarmSimulator(drone_count=6)
         sim.set_comms_mode("GOSSIP_CONSENSUS")
         sim.set_formation("NATURAL_FLOCK")
@@ -111,11 +111,24 @@ class TestGossipFormations(unittest.TestCase):
             sim.step()
 
         active = [d for d in sim.drones if not d.crashed]
-        # Check pairwise distances: should be spaced by at least 5.0m (nominal grid 8m)
+        self.assertEqual(len(active), 6)
+
+        # 1. Zero Zone 4 prop-clash (d > 1.5m) and safe separation (d > 3.0m)
         for i in range(len(active)):
             for j in range(i + 1, len(active)):
                 dist = float(np.linalg.norm(active[i].pos - active[j].pos))
-                self.assertGreater(dist, 5.0, f"Lattice nodes clumped: {dist:.2f}m")
+                self.assertGreater(dist, ZONE4_CLASH, f"Prop clash: {dist:.2f}m")
+                self.assertGreater(dist, 3.0, f"Boids clumped too close: {dist:.2f}m")
+
+        # 2. Altitude safety: all drones above floor (Z >= 10m)
+        altitudes = [d.pos[2] for d in active]
+        for alt in altitudes:
+            self.assertGreaterEqual(alt, 10.0)
+
+        # 3. Flocking cohesion: centroid of flock is near target (within 10m)
+        centroid = np.mean([d.pos for d in active], axis=0)
+        dist_to_target = float(np.linalg.norm(centroid - target))
+        self.assertLess(dist_to_target, 10.0, f"Flock centroid drifted from target: {dist_to_target:.1f}m")
 
     def test_gossip_formation_command_switching(self):
         """Verify SET_FORMATION updates GossipConsensusBrain and snapshot telemetry."""

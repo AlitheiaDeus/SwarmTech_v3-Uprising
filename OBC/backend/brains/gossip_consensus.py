@@ -301,29 +301,34 @@ class GossipConsensusBrain(BaseBrain):
 
             state = self._get_peer_state(drone.id)
             drone.acknowledged_target = np.copy(state.active_target)
-            k = sorted_ids.index(drone.id)
-            slot_pos = self._get_formation_slot(drone, k, living_count, state.active_target)
+            if self.formation_mode == "NATURAL_FLOCK":
+                accs[drone.id] = self._compute_boid_acceleration(
+                    drone, active_drones, state.active_target
+                )
+            else:
+                k = sorted_ids.index(drone.id)
+                slot_pos = self._get_formation_slot(drone, k, living_count, state.active_target)
 
-            # 1. Target Pursuit: Arrive steering toward decentralized geometric slot
-            target_acc = self._steer_toward(
-                drone.pos, drone.vel, slot_pos, max_speed=V_CRUISE
-            )
+                # 1. Target Pursuit: Arrive steering toward decentralized geometric slot
+                target_acc = self._steer_toward(
+                    drone.pos, drone.vel, slot_pos, max_speed=V_CRUISE
+                )
 
-            # 2. Local Flocking Alignment (match velocity of peers within 15m)
-            flock_acc = np.zeros(3, dtype=float)
-            neighbor_count = 0
-            for peer in active_drones:
-                if peer.id == drone.id:
-                    continue
-                d = float(np.linalg.norm(drone.pos - peer.pos))
-                if d <= 15.0:
-                    flock_acc += (peer.vel - drone.vel) * 0.3
-                    neighbor_count += 1
+                # 2. Local Flocking Alignment (match velocity of peers within 15m)
+                flock_acc = np.zeros(3, dtype=float)
+                neighbor_count = 0
+                for peer in active_drones:
+                    if peer.id == drone.id:
+                        continue
+                    d = float(np.linalg.norm(drone.pos - peer.pos))
+                    if d <= 15.0:
+                        flock_acc += (peer.vel - drone.vel) * 0.3
+                        neighbor_count += 1
 
-            if neighbor_count > 0:
-                flock_acc /= float(neighbor_count)
+                if neighbor_count > 0:
+                    flock_acc /= float(neighbor_count)
 
-            accs[drone.id] = target_acc + flock_acc
+                accs[drone.id] = target_acc + flock_acc
 
         return accs
 
@@ -427,13 +432,115 @@ class GossipConsensusBrain(BaseBrain):
             )
 
         else:
-            # NATURAL_FLOCK: Dispersed 2D/3D lattice around target to eliminate clumping
-            cols = max(1, int(math.ceil(math.sqrt(N))))
-            col = k % cols
-            row = k // cols
-            offset_x = (col - (cols - 1) / 2.0) * 8.0
-            offset_y = (row - (math.ceil(N / float(cols)) - 1) / 2.0) * 8.0
-            return target_pos + np.array([offset_x, offset_y, 0.0], dtype=float)
+            # NATURAL_FLOCK representative station for external inspection
+            return target_pos
+
+    def _compute_boid_acceleration(
+        self,
+        drone: Drone,
+        active_drones: List[Drone],
+        consensus_target: np.ndarray,
+    ) -> np.ndarray:
+        """Compute true decentralized 3D Reynolds boid flocking acceleration (TKT-23).
+        Forces:
+        1. Separation: Inverse-square 3D repulsion (d < 5.0m) + Zone 3 momentum damping (d < 3.5m).
+        2. Alignment: P2P velocity matching with neighbors (d < 14.0m).
+        3. Cohesion: Attraction toward local cluster centroid (d < 20.0m).
+        4. Goal Migration: Pull toward the consensus target.
+        5. Vertical Z-Space Staggering & Safety Floor (Z >= 10.0m).
+        """
+        # 1. Goal Migration toward consensus target
+        a_goal = self._steer_toward(
+            drone.pos, drone.vel, consensus_target, max_speed=V_CRUISE, arrival_radius=8.0
+        )
+
+        # 2. Separation (d < 5.0m)
+        a_sep = np.zeros(3, dtype=float)
+        R_SEP = 5.0
+        for peer in active_drones:
+            if peer.id == drone.id:
+                continue
+            diff = drone.pos - peer.pos
+            d = float(np.linalg.norm(diff))
+            if 0.001 < d < R_SEP:
+                rep_strength = (R_SEP - d) / (d + 0.1)
+                a_sep += (diff / d) * rep_strength * 4.0
+
+                # 3D Z-Space staggering: if horizontally close, push vertically apart to break 2D planes
+                d_xy = float(math.hypot(diff[0], diff[1]))
+                if d_xy < 3.5:
+                    z_sign = 1.0 if diff[2] >= 0.0 else -1.0
+                    a_sep[2] += z_sign * (3.5 - d_xy) * 3.0
+
+                # Zone 3 relative-velocity approach damping (brake incoming momentum)
+                if d < 3.5:
+                    v_rel = drone.vel - peer.vel
+                    closing = float(np.dot(v_rel, diff / d))
+                    if closing < 0:
+                        a_sep += -(diff / d) * closing * 2.5
+
+        # 3. Alignment (d < 14.0m) - velocity matching with local peers
+        a_align = np.zeros(3, dtype=float)
+        R_ALIGN = 14.0
+        align_weight_sum = 0.0
+        vel_sum = np.zeros(3, dtype=float)
+        for peer in active_drones:
+            if peer.id == drone.id:
+                continue
+            d = float(np.linalg.norm(drone.pos - peer.pos))
+            if d < R_ALIGN:
+                w = 1.0 - (d / R_ALIGN)
+                vel_sum += peer.vel * w
+                align_weight_sum += w
+
+        if align_weight_sum > 0:
+            mean_vel = vel_sum / align_weight_sum
+            a_align = (mean_vel - drone.vel) * 1.5
+
+        # 4. Cohesion (d < 20.0m) - pull toward local peer centroid
+        a_coh = np.zeros(3, dtype=float)
+        R_COH = 20.0
+        pos_sum = np.zeros(3, dtype=float)
+        coh_count = 0
+        for peer in active_drones:
+            if peer.id == drone.id:
+                continue
+            d = float(np.linalg.norm(drone.pos - peer.pos))
+            if d < R_COH:
+                pos_sum += peer.pos
+                coh_count += 1
+
+        if coh_count > 0:
+            centroid = pos_sum / float(coh_count)
+            offset_cent = centroid - drone.pos
+            d_cent = float(np.linalg.norm(offset_cent))
+            if d_cent > 3.0:
+                a_coh = (offset_cent / d_cent) * min(V_CRUISE, d_cent * 1.2) - drone.vel
+                a_coh *= 0.8
+
+        # 5. Altitude Floor & Ceiling Guard (Anisotropic 3D)
+        a_z_guard = 0.0
+        if drone.pos[2] < 12.0:
+            a_z_guard += max(0.0, (14.0 - drone.pos[2]) * 4.0 - drone.vel[2] * 2.0)
+        elif drone.pos[2] > 40.0:
+            a_z_guard -= max(0.0, (drone.pos[2] - 38.0) * 4.0 + drone.vel[2] * 2.0)
+
+        # Weighted combination of Reynolds boid forces
+        total_acc = (
+            2.0 * a_goal +
+            3.5 * a_sep +
+            1.5 * a_align +
+            1.0 * a_coh
+        )
+        total_acc[2] += a_z_guard
+
+        # Clamp to physical motor acceleration limit
+        norm_a = float(np.linalg.norm(total_acc))
+        A_MAX = 15.0
+        if norm_a > A_MAX:
+            total_acc = (total_acc / norm_a) * A_MAX
+
+        return total_acc
 
     @staticmethod
     def _steer_toward(
