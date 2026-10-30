@@ -3,44 +3,194 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SwarmTech3 SITL // God-View Omniscient Truth Viewport</title>
-  <style>
-    body {
-      margin: 0;
-      background: #040d14;
-      color: #00ffaa;
-      font-family: 'JetBrains Mono', 'Courier New', monospace;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-    }
-    .hud-box {
-      border: 1px solid #00ffaa;
-      padding: 2rem;
-      background: rgba(0, 255, 170, 0.05);
-      box-shadow: 0 0 20px rgba(0, 255, 170, 0.2);
-    }
-    h1 { margin-top: 0; font-size: 1.4rem; letter-spacing: 2px; }
-    p { color: #88c0a0; font-size: 0.9rem; }
-    .badge {
-      display: inline-block;
-      padding: 0.2rem 0.6rem;
-      background: #00ffaa;
-      color: #040d14;
-      font-weight: bold;
-      border-radius: 2px;
-      font-size: 0.8rem;
-    }
-  </style>
+  <title>AlitheiaHive SITL // God-View Omniscient Simulation Lab</title>
+  <meta name="description" content="Bubble 3: SITL World Simulator God-View Omniscient Viewport, Zone 4 Collision Spheres, and Full Casualty Fault Injection Deck.">
+  <link rel="stylesheet" href="/sim/css/sim_style.css?v=1">
+  
+  <!-- Three.js (r128) & OrbitControls from CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
-  <div class="hud-box">
-    <div class="badge">BUBBLE 3: SIM AIRGAP</div>
-    <h1>SITL TRUTH VIEWPORT</h1>
-    <p>God's Omniscient Perspective: Unfiltered Ground Truth Physics & Collision Geometries</p>
-    <p>SITL Engine: UDP 9000 (Telemetery TX) | UDP 9001 (Command RX) | UDP 14550 (MAVLink v2)</p>
+
+  <!-- Top Tactical Telemetry Header -->
+  <header id="top-bar">
+    <div class="brand-section">
+      <span class="brand-logo">&#x25C8; ALITHEIA SITL LAB</span>
+      <span class="brand-badge">BUBBLE 3 // GOD-VIEW</span>
+    </div>
+
+    <div class="status-section">
+      <div class="status-pill">
+        <div id="hud-conn-ind" class="status-indicator"></div>
+        <span id="hud-conn-text">SITL ONLINE</span>
+      </div>
+
+      <div class="status-pill">
+        SIM TIME: <strong id="hud-sim-time">0.0s</strong>
+      </div>
+
+      <div class="status-pill">
+        FLEET: <strong id="hud-drones">--/-- ALIVE</strong>
+      </div>
+
+      <div class="status-pill">
+        TETHER: <strong id="hud-tether">INTACT</strong>
+      </div>
+
+      <div class="status-pill">
+        RF ENV: <strong id="hud-rf">NOMINAL</strong>
+      </div>
+
+      <div class="status-pill">
+        GPU: <strong id="hud-fps">60 FPS</strong>
+      </div>
+
+      <a href="/" class="gcs-return-pill" title="Return to Operator Tactical GCS Viewport">&#x25C4; OPERATOR GCS</a>
+    </div>
+  </header>
+
+  <!-- 3D WebGL Canvas Viewport -->
+  <main id="viewport-container"></main>
+
+  <!-- Left Tactical Panel: Physical Ground Truth Monitor -->
+  <aside id="left-panel" class="tactical-panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <span class="panel-icon">&#x25C8;</span> PHYSICAL TRUTH FLEET
+      </div>
+      <button id="toggle-left-panel" class="panel-collapse-btn" title="Toggle Panel">&#x25C4;</button>
+    </div>
+    <div id="truth-panel-content" class="panel-content scrollable">
+
+      <!-- Safety Separation Invariants -->
+      <div class="control-group">
+        <div class="group-title">&#x25C9; SAFETY SEPARATION INVARIANTS</div>
+        <div class="sim-metric-row">
+          <span>MIN INTER-DRONE DIST:</span>
+          <span id="val-min-dist" class="sim-metric-val val-green">--</span>
+        </div>
+        <div class="sim-metric-row">
+          <span>ZONE 4 CLASHES (d &le; 1.5m):</span>
+          <span id="val-zone4-breaches" class="sim-metric-val">0</span>
+        </div>
+        <div class="sim-metric-row">
+          <span>PHYSICAL TETHER LENGTH:</span>
+          <span id="val-tether-len" class="sim-metric-val">0.0m</span>
+        </div>
+        <span class="group-sub">*Zone 4 Clash wireframe spheres flash RED at d &le; 1.5m</span>
+      </div>
+
+      <!-- Airframe Truth Cards Container -->
+      <div id="truth-cards-container" style="display: flex; flex-direction: column; gap: 8px;">
+        <!-- Dynamically populated in-place by sim_hud.js -->
+      </div>
+
+    </div>
+  </aside>
+  <!-- Edge Panel Restore Tab: Left -->
+  <button id="tab-restore-left" class="edge-restore-tab left-tab" title="Expand Physical Truth Fleet">
+    <span class="edge-icon">&#x25BA;</span> TRUTH
+  </button>
+
+  <!-- Right Tactical Panel: Casualty & Fault Injection Deck -->
+  <aside id="right-panel" class="tactical-panel">
+    <div class="panel-header">
+      <div class="panel-title">
+        <span class="panel-icon">&#x2699;</span> FAULT INJECTION DECK
+      </div>
+      <button id="toggle-right-panel" class="panel-collapse-btn" title="Toggle Panel">&#x25BA;</button>
+    </div>
+    <div id="fault-deck-content" class="panel-content scrollable">
+
+      <!-- Section: Electronic Warfare & RF Jamming -->
+      <div class="control-group">
+        <div class="group-title">&#x26A1; ELECTRONIC WARFARE (EW) JAMMING</div>
+        <div class="slider-row">
+          <input type="range" id="rf-jamming-slider" min="0" max="50" value="0" step="5" class="tactical-slider" title="Inject electronic warfare RF jamming noise">
+          <span id="rf-jamming-val" class="slider-val">0% JAMMING</span>
+        </div>
+        <div class="sim-metric-row">
+          <span>GCS RADIO HORIZON:</span>
+          <span class="sim-metric-val">120.0m (Dome)</span>
+        </div>
+        <span class="group-sub">*Airframes beyond 120m or jammed drop packets</span>
+      </div>
+
+      <!-- Section: Physical Fault Injections -->
+      <div class="control-group">
+        <div class="group-title">&#x26A0; PHYSICAL FAULT INJECTIONS</div>
+        <div class="btn-grid-2">
+          <button id="btn-kill-leader" class="tactical-btn btn-danger" title="Inject catastrophic motor failure on Flagship">&#x26A1; KILL LEADER</button>
+          <button id="btn-cut-tether" class="tactical-btn btn-amber" title="Sever physical umbilical cable">&#x2702; CUT TETHER</button>
+        </div>
+        <button id="btn-kill-random" class="tactical-btn btn-danger" style="margin-top: 2px;" title="Inject motor failure on random escort follower">&#x25BD; KILL RANDOM ESCORT</button>
+        
+        <div style="display: flex; gap: 6px; margin-top: 4px;">
+          <select id="select-kill-drone" style="flex: 1; background: #12031a; border: 1px solid rgba(255,0,234,0.4); color: #fff; font-family: monospace; font-size: 10px; padding: 4px; border-radius: 3px;">
+            <!-- Populated dynamically -->
+          </select>
+          <button id="btn-kill-select" class="tactical-btn btn-danger" style="padding: 4px 8px;" title="Kill selected airframe">KILL</button>
+        </div>
+      </div>
+
+      <!-- Section: Wreckage Salvage & Fleet Resurrect -->
+      <div class="control-group">
+        <div class="group-title">&#x267B; SALVAGE &amp; RESURRECTION LAB</div>
+        <div class="btn-grid-2">
+          <button id="btn-respawn-dead" class="tactical-btn btn-cyan" title="Revive dead casualties in-place">&#x267B; RESPAWN DEAD</button>
+          <button id="btn-clear-wreckage" class="tactical-btn btn-amber" title="Salvage/purge destroyed airframes from world">&#x232B; CLEAR WRECKAGE</button>
+        </div>
+        <button id="btn-reinforce-swarm" class="tactical-btn btn-cyan" style="margin-top: 4px;" title="Spawn new airframe from launch pad">&#x25B2; + SPAWN REINFORCEMENT</button>
+        <button id="btn-reboot-fleet" class="tactical-btn btn-danger" style="margin-top: 4px;" title="Full simulation factory reset">&#x21BA; FACTORY RESET SWARM</button>
+      </div>
+
+      <!-- Section: Airgap Invariant Inspector -->
+      <div class="control-group">
+        <div class="group-title">&#x25C7; AIRGAP INVARIANT CHECK</div>
+        <div class="sim-metric-row">
+          <span>OPERATOR AIRGAP:</span>
+          <span class="sim-metric-val val-green">ENFORCED (No Sim In Leak)</span>
+        </div>
+        <div class="sim-metric-row">
+          <span>CANYON AIRGAP:</span>
+          <span class="sim-metric-val val-green">UDP 9000/9001 / 14550</span>
+        </div>
+        <div class="sim-metric-row">
+          <span>BRAIN AIRGAP:</span>
+          <span class="sim-metric-val val-green">OBC Target Buffer Isolation</span>
+        </div>
+      </div>
+
+    </div>
+  </aside>
+  <!-- Edge Panel Restore Tab: Right -->
+  <button id="tab-restore-right" class="edge-restore-tab right-tab" title="Expand Fault Injection Deck">
+    FAULTS <span class="edge-icon">&#x25C4;</span>
+  </button>
+
+  <!-- Bottom Event Log Feed -->
+  <section id="sim-event-panel">
+    <div class="event-feed-header">
+      <span class="feed-icon">&#x25C7;</span> SITL TRUTH &amp; FAULT EVENT LOG
+    </div>
+    <ul id="event-log-list" class="scrollable">
+      <!-- Log lines dynamically injected -->
+    </ul>
+  </section>
+
+  <!-- Camera Controls Hint -->
+  <div id="camera-hints">
+    <div><span>[L-DRAG]</span> ORBIT</div>
+    <div><span>[R-DRAG]</span> PAN</div>
+    <div><span>[WHEEL]</span> ZOOM</div>
+    <div><span>[C]</span> CHASE CAM</div>
+    <div><span>[R]</span> RESET CAM</div>
   </div>
+
+  <!-- Telemetry Client, Three.js Viewport App & Tactical HUD -->
+  <script src="/sim/js/ws_client.js?v=1"></script>
+  <script src="/sim/js/sim_app.js?v=1"></script>
+  <script src="/sim/js/sim_hud.js?v=1"></script>
 </body>
 </html>

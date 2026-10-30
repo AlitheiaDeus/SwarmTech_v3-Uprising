@@ -54,6 +54,11 @@
         <span class="failsafe-pulse"></span>
         <span id="hud-failsafe-text">UPLINK ACTIVE</span>
       </div>
+
+      <a href="/sim" target="_blank" id="btn-open-sim-lab" class="status-pill sim-lab-pill" title="Launch SITL God-View Simulation Lab in new tab">
+        <span class="sim-pulse-dot"></span>
+        <span class="sim-lab-text">&#x26A0; SIM LAB // GOD-VIEW &#x2197;</span>
+      </a>
     </div>
   </header>
 
@@ -97,13 +102,9 @@
         </div>
       </div>
 
-      <!-- Section: RF Channel & Electronic Warfare (PLN-03) -->
-      <div class="control-group rf-group sim-lab-group">
-        <div class="group-title rf-title sim-lab-title"><span class="badge-sim-tag">SIM</span> &#x26A1; RF CHANNEL &amp; JAMMING</div>
-        <div class="slider-row">
-          <input type="range" id="rf-jamming-slider" min="0" max="50" value="0" step="5" class="tactical-slider slider-magenta" title="[SITL Sim Lab] Inject electronic warfare radio noise">
-          <span id="rf-jamming-val" class="slider-val val-magenta">0% JAMMING</span>
-        </div>
+      <!-- Section: RF Comms Status -->
+      <div class="control-group rf-group">
+        <div class="group-title rf-title">&#x25C8; RF TELEMETRY LINK</div>
         <div class="rf-stats-row">
           <span>GCS HORIZON: <strong>120m</strong></span>
           <span id="rf-env-status">RF: <strong>NOMINAL</strong></span>
@@ -176,18 +177,10 @@
         <button id="btn-cancel-rtb" class="tactical-btn btn-cancel-recovery" style="display: none;">&#x2716; CANCEL RECOVERY &amp; RESUME</button>
       </div>
 
-      <!-- Section: Casualty Lab Controls (SITL God-View / Sim Lab) -->
-      <div class="control-group sim-lab-group">
-        <div class="group-title sim-lab-title"><span class="badge-sim-tag">SIM LAB</span> &#x26A0; CASUALTY SIMULATION</div>
-        <div class="btn-grid-2">
-          <button id="btn-kill-leader" class="tactical-btn btn-sim-lab" title="[SITL Sim Lab] Inject motor failure on Flagship">&#x26A1; KILL LEADER</button>
-          <button id="btn-cut-tether" class="tactical-btn btn-sim-lab" title="[SITL Sim Lab] Force physical umbilical severance">&#x2702; CUT / JETTISON TETHER</button>
-          <button id="btn-kill-random" class="tactical-btn btn-sim-lab" title="[SITL Sim Lab] Inject motor failure on random escort">&#x25BD; KILL ESCORT</button>
-          <button id="btn-respawn-dead" class="tactical-btn btn-sim-lab" title="[SITL Sim Lab] Revive dead casualties on ground">&#x267B; RESPAWN DEAD</button>
-        </div>
-        <button id="btn-clear-wreckage" class="tactical-btn btn-sim-lab-outline" title="[SITL Sim Lab] Purge destroyed airframes from world">&#x232B; CLEAR WRECKAGE</button>
-        <button id="btn-reinforce-swarm" class="tactical-btn btn-sim-lab-reinforce" title="[SITL Sim Lab] Spawn new airframe at launch pad">&#x25B2; + LAUNCH REINFORCEMENT</button>
-        <button id="btn-reboot-fleet" class="tactical-btn btn-sim-lab-full-reset" title="[SITL Sim Lab] Full simulation factory reset">&#x21BA; FACTORY RESET SWARM</button>
+      <!-- Section: Fleet Flight Operations -->
+      <div class="control-group">
+        <div class="group-title">&#x25C8; FLEET FLIGHT OPERATIONS</div>
+        <button id="btn-reinforce-swarm" class="tactical-btn btn-send" style="width: 100%;" title="Scramble reserve airframe from base launch pad">&#x25B2; SCRAMBLE REINFORCEMENT</button>
       </div>
 
     </div>

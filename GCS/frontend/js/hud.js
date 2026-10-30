@@ -693,14 +693,19 @@
         card.el.classList.remove('leader-card', 'crashed-card', 'lkp-card', 'gossip-card', 'takeoff-card', 'enroute-card', 'jettison-card', 'landed-card', 'landing-card', 'hold-card');
         card.elRole.className = 'drone-role-badge';
 
+        function setActionBtn(text, className, title) {
+            if (!card.elActionBtn) return;
+            card.elActionBtn.textContent = text;
+            card.elActionBtn.className = className;
+            if (title) card.elActionBtn.title = title;
+        }
+
         if (drone.crashed) {
             card.el.classList.add('crashed-card');
             card.elStatus.textContent = 'CRASHED';
             card.elStatus.className = 'status-tag tag-crashed';
             card.elRole.textContent = 'DESTROYED';
-            card.elActionBtn.textContent = 'REBOOT';
-            card.elActionBtn.className = 'card-btn-action btn-reboot';
-            card.elActionBtn.title = '[SITL Sim Lab] Revive crashed airframe';
+            setActionBtn('REBOOT', 'card-btn-action btn-reboot', '[SITL Sim Lab] Revive crashed airframe');
             if (card.elLandBtn) card.elLandBtn.style.display = 'none';
         } else if (drone.flight_state === 'LANDED') {
             card.el.classList.add('landed-card');
@@ -713,8 +718,7 @@
                 card.elLandBtn.textContent = 'LAUNCH';
                 card.elLandBtn.className = 'card-btn-action btn-launch';
             }
-            card.elActionBtn.textContent = 'KILL';
-            card.elActionBtn.className = 'card-btn-action btn-kill';
+            setActionBtn('KILL', 'card-btn-action btn-kill');
         } else if (drone.flight_state === 'DESCENDING') {
             card.el.classList.add('landing-card');
             const padStr = drone.landing_pad_idx !== undefined && drone.landing_pad_idx !== null ? `P${drone.landing_pad_idx}` : '';
@@ -726,8 +730,7 @@
                 card.elLandBtn.textContent = 'LANDING';
                 card.elLandBtn.className = 'card-btn-action btn-landing-busy';
             }
-            card.elActionBtn.textContent = 'KILL';
-            card.elActionBtn.className = 'card-btn-action btn-kill';
+            setActionBtn('KILL', 'card-btn-action btn-kill');
         } else if (drone.status === 'BREAKAWAY_JETTISON') {
             card.el.classList.add('jettison-card');
             card.elStatus.textContent = 'JETTISONING';
@@ -735,8 +738,7 @@
             card.elRole.textContent = '⏏ JETTISON';
             card.elRole.classList.add('badge-jettison');
             if (card.elLandBtn) card.elLandBtn.style.display = 'none';
-            card.elActionBtn.textContent = 'KILL';
-            card.elActionBtn.className = 'card-btn-action btn-kill';
+            setActionBtn('KILL', 'card-btn-action btn-kill');
         } else if (drone.is_leader) {
             card.el.classList.add('leader-card');
             card.elStatus.textContent = overheadMarshalActive ? 'OVERHEAD HOLD' : 'LEADER';
@@ -747,8 +749,7 @@
                 card.elLandBtn.textContent = 'LAND';
                 card.elLandBtn.className = 'card-btn-action btn-land';
             }
-            card.elActionBtn.textContent = 'KILL';
-            card.elActionBtn.className = 'card-btn-action btn-kill';
+            setActionBtn('KILL', 'card-btn-action btn-kill');
         } else if (drone.is_2ic) {
             card.elStatus.textContent = overheadMarshalActive ? 'OVERHEAD HOLD' : 'ACTIVE';
             card.elStatus.className = overheadMarshalActive ? 'status-tag tag-hold' : 'status-tag tag-active';
@@ -759,16 +760,14 @@
                 card.elLandBtn.textContent = 'LAND';
                 card.elLandBtn.className = 'card-btn-action btn-land';
             }
-            card.elActionBtn.textContent = 'KILL';
-            card.elActionBtn.className = 'card-btn-action btn-kill';
+            setActionBtn('KILL', 'card-btn-action btn-kill');
         } else if (drone.flight_state === 'TAKEOFF') {
             card.el.classList.add('takeoff-card');
             card.elStatus.textContent = 'TAKEOFF';
             card.elStatus.className = 'status-tag tag-takeoff';
             card.elRole.textContent = 'REINFORCE';
             if (card.elLandBtn) card.elLandBtn.style.display = 'none';
-            card.elActionBtn.textContent = 'KILL';
-            card.elActionBtn.className = 'card-btn-action btn-kill';
+            setActionBtn('KILL', 'card-btn-action btn-kill');
         } else if (drone.flight_state === 'EN_ROUTE') {
             card.el.classList.add('enroute-card');
             card.elStatus.textContent = 'EN ROUTE';
@@ -779,16 +778,14 @@
                 card.elLandBtn.textContent = 'LAND';
                 card.elLandBtn.className = 'card-btn-action btn-land';
             }
-            card.elActionBtn.textContent = 'KILL';
-            card.elActionBtn.className = 'card-btn-action btn-kill';
+            setActionBtn('KILL', 'card-btn-action btn-kill');
         } else if (drone.lost_link) {
             card.el.classList.add('lkp-card');
             card.elStatus.textContent = 'LKP RECOVERY';
             card.elStatus.className = 'status-tag tag-lkp';
             card.elRole.textContent = `TIER-${drone.tier}`;
             if (card.elLandBtn) card.elLandBtn.style.display = 'none';
-            card.elActionBtn.textContent = 'KILL';
-            card.elActionBtn.className = 'card-btn-action btn-kill';
+            setActionBtn('KILL', 'card-btn-action btn-kill');
         } else if (drone.status === 'PROPAGATING') {
             card.el.classList.add('gossip-card');
             card.elStatus.textContent = 'ECHO WAVE';
@@ -799,8 +796,7 @@
                 card.elLandBtn.textContent = 'LAND';
                 card.elLandBtn.className = 'card-btn-action btn-land';
             }
-            card.elActionBtn.textContent = 'KILL';
-            card.elActionBtn.className = 'card-btn-action btn-kill';
+            setActionBtn('KILL', 'card-btn-action btn-kill');
         } else {
             card.elStatus.textContent = overheadMarshalActive ? 'OVERHEAD HOLD' : 'ACTIVE';
             card.elStatus.className = overheadMarshalActive ? 'status-tag tag-hold' : 'status-tag tag-active';
@@ -810,8 +806,7 @@
                 card.elLandBtn.textContent = 'LAND';
                 card.elLandBtn.className = 'card-btn-action btn-land';
             }
-            card.elActionBtn.textContent = 'KILL';
-            card.elActionBtn.className = 'card-btn-action btn-kill';
+            setActionBtn('KILL', 'card-btn-action btn-kill');
         }
     }
 
@@ -856,24 +851,25 @@
                 </div>
             </div>
             <div class="card-footer">
-                <button class="card-btn-action btn-land-action btn-land">LAND</button>
-                <button class="card-btn-action btn-kill" title="[SITL Sim Lab] Inject motor failure on airframe">KILL</button>
+                <button class="card-btn-action btn-land-action btn-land" style="width: 100%;">LAND</button>
             </div>
         `;
 
         const actionBtn = el.querySelector('.btn-kill');
         const landBtn = el.querySelector('.btn-land-action');
 
-        actionBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (deadDroneIds.has(drone.id)) {
-                logEvent('CMD', `Rebooting drone #${drone.id}`);
-                window.swarmClient?.send({ cmd: 'REBOOT_DRONE', id: drone.id });
-            } else {
-                logEvent('CMD', `Terminating drone #${drone.id}`);
-                window.swarmClient?.send({ cmd: 'KILL_DRONE', id: drone.id });
-            }
-        });
+        if (actionBtn) {
+            actionBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (deadDroneIds.has(drone.id)) {
+                    logEvent('CMD', `Rebooting drone #${drone.id}`);
+                    window.swarmClient?.send({ cmd: 'REBOOT_DRONE', id: drone.id });
+                } else {
+                    logEvent('CMD', `Terminating drone #${drone.id}`);
+                    window.swarmClient?.send({ cmd: 'KILL_DRONE', id: drone.id });
+                }
+            });
+        }
 
         landBtn.addEventListener('click', (e) => {
             e.stopPropagation();

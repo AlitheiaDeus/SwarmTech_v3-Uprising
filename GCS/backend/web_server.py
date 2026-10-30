@@ -83,10 +83,14 @@ class SwarmWebServer:
         else:
             self.frontend_dir = Path(frontend_dir)
 
+        # SITL God-View Simulation Lab Frontend (SIM/frontend/) (TKT-35)
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        self.sim_frontend_dir = repo_root / "SIM" / "frontend"
+
         @web.middleware
         async def no_cache_middleware(request: web.Request, handler) -> web.StreamResponse:
             response = await handler(request)
-            if request.path.startswith(("/js", "/css", "/static")) or request.path == "/":
+            if request.path.startswith(("/js", "/css", "/static", "/sim")) or request.path in ("/", "/sim"):
                 response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
                 response.headers["Pragma"] = "no-cache"
                 response.headers["Expires"] = "0"
@@ -111,7 +115,11 @@ class SwarmWebServer:
         # Static GCS frontend routes
         self.app.router.add_get("/", self.index_handler)
 
-        # Ensure frontend directories exist
+        # SITL God-View Simulation Lab routes (TKT-35)
+        self.app.router.add_get("/sim", self.sim_index_handler)
+        self.app.router.add_get("/sim/", self.sim_index_handler)
+
+        # Ensure GCS frontend directories exist
         self.frontend_dir.mkdir(parents=True, exist_ok=True)
         css_dir = self.frontend_dir / "css"
         css_dir.mkdir(parents=True, exist_ok=True)
@@ -121,6 +129,16 @@ class SwarmWebServer:
         self.app.router.add_static("/static", path=str(self.frontend_dir), name="static", show_index=False)
         self.app.router.add_static("/css", path=str(css_dir), name="css", show_index=False)
         self.app.router.add_static("/js", path=str(js_dir), name="js", show_index=False)
+
+        # Ensure SIM frontend directories exist (TKT-35)
+        if self.sim_frontend_dir.exists():
+            sim_css_dir = self.sim_frontend_dir / "css"
+            sim_css_dir.mkdir(parents=True, exist_ok=True)
+            sim_js_dir = self.sim_frontend_dir / "js"
+            sim_js_dir.mkdir(parents=True, exist_ok=True)
+
+            self.app.router.add_static("/sim/css", path=str(sim_css_dir), name="sim_css", show_index=False)
+            self.app.router.add_static("/sim/js", path=str(sim_js_dir), name="sim_js", show_index=False)
 
     async def index_handler(self, request: web.Request) -> web.Response:
         """Serve index.html from frontend directory or a fallback status page."""
@@ -135,6 +153,22 @@ class SwarmWebServer:
   <h2>[SwarmTech3_UpRising] Telemetry & WebGL GCS Server Active</h2>
   <p>WebSocket endpoint: <code>/ws</code></p>
   <p>Status: ONLINE | 60 FPS Vectorized Engine Active</p>
+</body>
+</html>"""
+        return web.Response(text=fallback_html, content_type="text/html")
+
+    async def sim_index_handler(self, request: web.Request) -> web.Response:
+        """Serve SITL God-View Simulation Lab index.html (TKT-35)."""
+        sim_index_file = self.sim_frontend_dir / "index.html"
+        if sim_index_file.exists():
+            return web.FileResponse(str(sim_index_file))
+
+        fallback_html = """<!DOCTYPE html>
+<html>
+<head><title>SITL God-View Simulation Lab</title></head>
+<body style="background:#03070d;color:#FF00EA;font-family:monospace;padding:2rem;">
+  <h2>[SITL World Engine] Simulation Lab Viewport</h2>
+  <p>Status: ONLINE | God-View Viewport Not Found</p>
 </body>
 </html>"""
         return web.Response(text=fallback_html, content_type="text/html")

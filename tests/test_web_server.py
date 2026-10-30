@@ -90,6 +90,63 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("setLeftPanelCollapsed", hud_js)
                 self.assertIn("tab-restore-left", hud_js)
 
+    async def test_dual_viewport_serving_and_airgap(self):
+        """Verify TKT-35: Clean Operator GCS vs SITL God-View Simulation Lab across the Airgap."""
+        async with ClientSession() as session:
+            # 1. Operator Tactical GCS (http://127.0.0.1:port/)
+            async with session.get(f"http://127.0.0.1:{self.port}/") as resp:
+                self.assertEqual(resp.status, 200)
+                gcs_html = await resp.text()
+
+                # Operator GCS MUST contain C2 deck and SIM LAB link
+                self.assertIn("btn-open-sim-lab", gcs_html)
+                self.assertIn("SIM LAB // GOD-VIEW", gcs_html)
+                self.assertIn("COMMAND DECK", gcs_html)
+                self.assertIn("SWARM FORMATION", gcs_html)
+
+                # Operator GCS MUST NOT contain God-Mode fault injection controls (Operator Airgap!)
+                self.assertNotIn("KILL LEADER", gcs_html)
+                self.assertNotIn("CUT / JETTISON TETHER", gcs_html)
+                self.assertNotIn("rf-jamming-slider", gcs_html)
+                self.assertNotIn("FACTORY RESET SWARM", gcs_html)
+
+            # 2. SITL God-View Simulation Lab (http://127.0.0.1:port/sim)
+            async with session.get(f"http://127.0.0.1:{self.port}/sim") as resp:
+                self.assertEqual(resp.status, 200)
+                sim_html = await resp.text()
+
+                # SIM Lab MUST contain God-View brand and return link
+                self.assertIn("ALITHEIA SITL LAB", sim_html)
+                self.assertIn("BUBBLE 3 // GOD-VIEW", sim_html)
+                self.assertIn("OPERATOR GCS", sim_html)
+
+                # SIM Lab MUST contain full fault injection deck
+                self.assertIn("btn-kill-leader", sim_html)
+                self.assertIn("btn-cut-tether", sim_html)
+                self.assertIn("rf-jamming-slider", sim_html)
+                self.assertIn("SAFETY SEPARATION INVARIANTS", sim_html)
+                self.assertIn("ZONE 4 CLASHES", sim_html)
+
+            # 3. SITL CSS assets
+            async with session.get(f"http://127.0.0.1:{self.port}/sim/css/sim_style.css") as resp:
+                self.assertEqual(resp.status, 200)
+                sim_css = await resp.text()
+                self.assertIn("--neon-magenta: #FF00EA;", sim_css)
+                self.assertIn("edge-restore-tab", sim_css)
+
+            # 4. SITL JS assets
+            async with session.get(f"http://127.0.0.1:{self.port}/sim/js/sim_app.js") as resp:
+                self.assertEqual(resp.status, 200)
+                sim_app_js = await resp.text()
+                self.assertIn("ghostSphere", sim_app_js)
+                self.assertIn("setupRfHorizonDome", sim_app_js)
+
+            async with session.get(f"http://127.0.0.1:{self.port}/sim/js/sim_hud.js") as resp:
+                self.assertEqual(resp.status, 200)
+                sim_hud_js = await resp.text()
+                self.assertIn("simHud", sim_hud_js)
+                self.assertIn("SET_RF_JAMMING", sim_hud_js)
+
     async def test_websocket_telemetry_streaming(self):
         """Verify WebSocket client receives continuous 60 FPS state frames."""
         ws_url = f"http://127.0.0.1:{self.port}/ws"

@@ -125,6 +125,42 @@ html, body {
   color: var(--neon-cyan);
 }
 
+.sim-lab-pill {
+  text-decoration: none;
+  background: rgba(255, 0, 234, 0.12);
+  border: 1px solid #FF00EA;
+  padding: 3px 10px;
+  border-radius: 4px;
+  color: #FF00EA !important;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  box-shadow: 0 0 10px rgba(255, 0, 234, 0.25);
+  transition: all 0.2s ease-in-out;
+  cursor: pointer;
+}
+
+.sim-lab-pill:hover {
+  background: rgba(255, 0, 234, 0.28);
+  box-shadow: 0 0 18px rgba(255, 0, 234, 0.6);
+  color: #ffffff !important;
+  transform: translateY(-1px);
+}
+
+.sim-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #FF00EA;
+  box-shadow: 0 0 8px #FF00EA;
+  display: inline-block;
+  animation: pulse-sim-dot 1.4s infinite;
+}
+
+@keyframes pulse-sim-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
 .status-indicator {
   width: 8px;
   height: 8px;
