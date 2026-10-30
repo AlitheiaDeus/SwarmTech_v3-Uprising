@@ -186,6 +186,162 @@ class TestMavlinkBridge(unittest.TestCase):
         self.assertIn("mavlink_bytes_sent", res)
         self.assertGreater(res["telemetry_bytes_sent"], 0)
 
+    def test_home_anchor_comes_from_sim(self):
+        """Verify home coordinates are dynamically queried from SIM rather than hardcoded in bridge."""
+        # 1. Defaults to Tokyo Bay / Tennozu Isle from SIM
+        self.assertAlmostEqual(self.bridge.home_lat, 35.625971, places=5)
+        self.assertAlmostEqual(self.bridge.home_lon, 139.734759, places=5)
+        self.assertEqual(self.bridge.home_lat, self.sim.home_lat)
+        self.assertEqual(self.bridge.home_lon, self.sim.home_lon)
+
+        # 2. Dynamic SIM update reflects in bridge immediately
+        self.sim.home_lat = 40.7128
+        self.sim.home_lon = -74.0060
+        self.assertEqual(self.bridge.home_lat, 40.7128)
+        self.assertEqual(self.bridge.home_lon, -74.0060)
+
+    def test_inbound_set_position_target_within_geofence(self):
+        """Verify MAVLink SET_POSITION_TARGET_GLOBAL_INT within 120m steers the swarm."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        import math
+        # Calculate GPS coordinate for local (x=30m, y=40m, z=25m)
+        delta_lat = 40.0 / 111139.0
+        delta_lon = 30.0 / (111139.0 * math.cos(math.radians(self.sim.home_lat)))
+        target_lat = self.sim.home_lat + delta_lat
+        target_lon = self.sim.home_lon + delta_lon
+
+        client_mav = mavlink2.MAVLink(None, srcSystem=255, srcComponent=1)
+        msg = client_mav.set_position_target_global_int_encode(
+            time_boot_ms=1000,
+            target_system=1,
+            target_component=1,
+            coordinate_frame=mavlink2.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+            type_mask=0b0000111111111000,
+            lat_int=int(target_lat * 1e7),
+            lon_int=int(target_lon * 1e7),
+            alt=25.0,
+            vx=0, vy=0, vz=0,
+            afx=0, afy=0, afz=0,
+            yaw=0, yaw_rate=0,
+        )
+        pkt = msg.pack(client_mav)
+
+        # Send to bridge's socket
+        # Note: bridge.mavlink_sock sends from an ephemeral port; for testing poll,
+        # we can feed packet into handle_mavlink_message or simulate recv
+        res = self.bridge.handle_mavlink_message(msg, (self.host, 14550))
+        self.assertIsNotNone(res)
+        self.assertEqual(res["status"], "OK")
+        self.assertAlmostEqual(self.sim.target_pos[0], 30.0, delta=1.0)
+        self.assertAlmostEqual(self.sim.target_pos[1], 40.0, delta=1.0)
+        self.assertAlmostEqual(self.sim.target_pos[2], 25.0, delta=0.5)
+
+    def test_inbound_set_position_target_rejected_outside_geofence(self):
+        """Verify clicks in Timbuktu / outside 120m geofence are strictly rejected."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        # Target 50,000m away (far outside 120m geofence)
+        target_lat = self.sim.home_lat + 1.0  # ~111km away
+        target_lon = self.sim.home_lon + 1.0
+
+        old_target = np.copy(self.sim.target_pos)
+
+        client_mav = mavlink2.MAVLink(None, srcSystem=255, srcComponent=1)
+        msg = client_mav.set_position_target_global_int_encode(
+            time_boot_ms=1000,
+            target_system=1,
+            target_component=1,
+            coordinate_frame=mavlink2.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+            type_mask=0,
+            lat_int=int(target_lat * 1e7),
+            lon_int=int(target_lon * 1e7),
+            alt=30.0,
+            vx=0, vy=0, vz=0,
+            afx=0, afy=0, afz=0,
+            yaw=0, yaw_rate=0,
+        )
+
+        res = self.bridge.handle_mavlink_message(msg, (self.host, 14550))
+        self.assertIsNotNone(res)
+        self.assertEqual(res["status"], "REJECTED_GEOFENCE")
+        self.assertGreater(res["dist"], 120.0)
+        # Swarm target remains unchanged
+        np.testing.assert_allclose(self.sim.target_pos, old_target)
+
+    def test_inbound_command_long_actions(self):
+        """Verify COMMAND_LONG actions: RTL, Land, Arm/Disarm."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        client_mav = mavlink2.MAVLink(None, srcSystem=255, srcComponent=1)
+
+        # 1. RTL
+        msg_rtl = client_mav.command_long_encode(
+            target_system=1,
+            target_component=1,
+            command=mavlink2.MAV_CMD_NAV_RETURN_TO_LAUNCH,
+            confirmation=0,
+            param1=0, param2=0, param3=0, param4=0, param5=0, param6=0, param7=0,
+        )
+        res_rtl = self.bridge.handle_mavlink_message(msg_rtl, (self.host, 14550))
+        self.assertEqual(res_rtl["status"], "OK")
+        self.assertTrue(self.sim.overhead_marshal_active)
+
+        # 2. LAND
+        msg_land = client_mav.command_long_encode(
+            target_system=1,
+            target_component=1,
+            command=mavlink2.MAV_CMD_NAV_LAND,
+            confirmation=0,
+            param1=0, param2=0, param3=0, param4=0, param5=0, param6=0, param7=0,
+        )
+        res_land = self.bridge.handle_mavlink_message(msg_land, (self.host, 14550))
+        self.assertEqual(res_land["status"], "OK")
+        self.assertEqual(self.sim.recovery_stage, "LANDING")
+
+        # 3. DISARM
+        msg_disarm = client_mav.command_long_encode(
+            target_system=1,
+            target_component=1,
+            command=mavlink2.MAV_CMD_COMPONENT_ARM_DISARM,
+            confirmation=0,
+            param1=0.0, param2=0, param3=0, param4=0, param5=0, param6=0, param7=0,
+        )
+        res_disarm = self.bridge.handle_mavlink_message(msg_disarm, (self.host, 14550))
+        self.assertEqual(res_disarm["status"], "OK")
+        self.assertFalse(all(d.armed for d in self.sim.drones))
+
+    def test_inbound_mavlink_socket_poll(self):
+        """Verify binary MAVLink packet sent over UDP network socket is polled and executed."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        client_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        bridge_mav_port = self.bridge.mavlink_sock.getsockname()[1]
+
+        try:
+            client_mav = mavlink2.MAVLink(None, srcSystem=255, srcComponent=1)
+            msg = client_mav.command_long_encode(
+                target_system=1,
+                target_component=1,
+                command=mavlink2.MAV_CMD_NAV_RETURN_TO_LAUNCH,
+                confirmation=0,
+                param1=0, param2=0, param3=0, param4=0, param5=0, param6=0, param7=0,
+            )
+            pkt = msg.pack(client_mav)
+            client_sock.sendto(pkt, (self.host, bridge_mav_port))
+
+            # Poll via bridge
+            responses = self.bridge.poll_mavlink_commands()
+            self.assertEqual(len(responses), 1)
+            self.assertEqual(responses[0]["cmd"], "MAV_CMD_NAV_RETURN_TO_LAUNCH")
+            self.assertTrue(self.sim.overhead_marshal_active)
+        finally:
+            client_sock.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,10 +37,15 @@ DEFAULT_TX_PORT: int = 9000        # UDP Swarm state JSON broadcast
 DEFAULT_RX_PORT: int = 9001        # UDP External command listener
 DEFAULT_MAVLINK_PORT: int = 14550   # UDP QGroundControl / SITL loopback
 
-# Reference Geographic Anchor for MAVLink GPS mapping (San Francisco bay area)
-HOME_LAT: float = 37.7749
-HOME_LON: float = -122.4194
-HOME_ALT: float = 20.0             # Meters AMSL
+# Default Reference Geographic Anchor for MAVLink GPS mapping (Tokyo Bay / Shinagawa Canal)
+DEFAULT_HOME_LAT: float = 35.625971
+DEFAULT_HOME_LON: float = 139.734759
+DEFAULT_HOME_ALT: float = 20.0             # Meters AMSL
+
+# Backwards compatibility constants
+HOME_LAT: float = DEFAULT_HOME_LAT
+HOME_LON: float = DEFAULT_HOME_LON
+HOME_ALT: float = DEFAULT_HOME_ALT
 
 
 # ==============================================================================
@@ -71,6 +76,7 @@ class MavlinkBridge:
         self.last_reached_sent: bool = False
         self.packet_count: int = 0
         self.commands_processed: int = 0
+        self.mavlink_commands_processed: int = 0
 
         # Setup TX Socket (Broadcast / Send JSON)
         self.tx_sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -82,14 +88,33 @@ class MavlinkBridge:
         self.rx_sock.bind((self.host, self.rx_port))
         self.rx_sock.setblocking(False)
 
-        # Setup MAVLink TX Socket
+        # Setup MAVLink TX/RX Socket
         self.mavlink_sock: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.mavlink_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.mavlink_sock.bind((self.host, 0))
+        self.mavlink_sock.setblocking(False)
+        self.last_client_mavlink_addr: Optional[Tuple[str, int]] = None
 
         # MAVLink Protocol Encoder
         if HAVE_PYMAVLINK:
             self.mav = mavlink2.MAVLink(None, srcSystem=1, srcComponent=1)
         else:
             self.mav = None
+
+    @property
+    def home_lat(self) -> float:
+        """Dynamic geographic latitude anchor queried from SIM world engine."""
+        return getattr(self.sim, "home_lat", DEFAULT_HOME_LAT)
+
+    @property
+    def home_lon(self) -> float:
+        """Dynamic geographic longitude anchor queried from SIM world engine."""
+        return getattr(self.sim, "home_lon", DEFAULT_HOME_LON)
+
+    @property
+    def home_alt(self) -> float:
+        """Dynamic geographic altitude anchor queried from SIM world engine."""
+        return getattr(self.sim, "home_alt", DEFAULT_HOME_ALT)
 
     def broadcast_telemetry(self, snapshot: Optional[Dict[str, Any]] = None) -> int:
         """Broadcast simulation state JSON snapshot to UDP port 9000.
@@ -345,11 +370,11 @@ class MavlinkBridge:
 
                 # 2. GLOBAL_POSITION_INT at 10 Hz (every 0.1s)
                 if send_pos:
-                    # Flat-Earth coordinate projection to GPS degrees
+                    # Flat-Earth coordinate projection to GPS degrees relative to dynamic SIM home anchor
                     # 1 deg lat ~ 111139m, 1 deg lon ~ 111139 * cos(lat)m
-                    lat_deg = HOME_LAT + (drone.pos[1] / 111139.0)
-                    lon_deg = HOME_LON + (drone.pos[0] / (111139.0 * math.cos(math.radians(HOME_LAT))))
-                    alt_m = HOME_ALT + drone.pos[2]
+                    lat_deg = self.home_lat + (drone.pos[1] / 111139.0)
+                    lon_deg = self.home_lon + (drone.pos[0] / (111139.0 * math.cos(math.radians(self.home_lat))))
+                    alt_m = self.home_alt + drone.pos[2]
                     rel_alt_m = drone.pos[2]
 
                     # Convert heading to centidegrees [0..35999]
@@ -370,6 +395,10 @@ class MavlinkBridge:
                     pkt_pos = msg_pos.pack(self.mav)
                     bytes_sent += self.mavlink_sock.sendto(pkt_pos, (self.host, self.mavlink_port))
 
+            # 1b. Periodic HOME_POSITION broadcast (at 1 Hz) so Mission Planner auto-centers on SIM base
+            if send_hb:
+                bytes_sent += self.send_home_position((self.host, self.mavlink_port))
+
         # 3. MISSION_ITEM_REACHED (#46) when active target reached
         target_reached = self.sim.is_target_reached()
         if target_reached and not self.last_reached_sent:
@@ -385,15 +414,288 @@ class MavlinkBridge:
 
         return bytes_sent
 
+    # ==========================================================================
+    # MAVLink Inbound Commands & Outbound Helpers (TKT-46)
+    # ==========================================================================
+    def send_mavlink_packet(self, msg: Any, dest_addr: Optional[Tuple[str, int]] = None) -> int:
+        """Pack and send a MAVLink message to client or default loopback port."""
+        if not HAVE_PYMAVLINK or self.mav is None:
+            return 0
+        try:
+            pkt = msg.pack(self.mav)
+            dest = dest_addr or self.last_client_mavlink_addr or (self.host, self.mavlink_port)
+            return self.mavlink_sock.sendto(pkt, dest)
+        except Exception:
+            return 0
+
+    def send_mavlink_ack(
+        self,
+        command: int,
+        result: int,
+        dest_addr: Optional[Tuple[str, int]] = None,
+    ) -> int:
+        """Send a MAVLink COMMAND_ACK (#77) packet back to external GCS."""
+        if not HAVE_PYMAVLINK or self.mav is None:
+            return 0
+        if hasattr(self.mav, "command_ack_encode"):
+            msg_ack = self.mav.command_ack_encode(
+                command=int(command),
+                result=int(result),
+            )
+            return self.send_mavlink_packet(msg_ack, dest_addr)
+        return 0
+
+    def send_mavlink_statustext(
+        self,
+        text: str,
+        severity: int = 6,  # MAV_SEVERITY_INFO
+        dest_addr: Optional[Tuple[str, int]] = None,
+    ) -> int:
+        """Send a MAVLink STATUSTEXT (#253) notification message to external GCS."""
+        if not HAVE_PYMAVLINK or self.mav is None:
+            return 0
+        if hasattr(self.mav, "statustext_encode"):
+            text_bytes = text[:50].encode("utf-8")
+            msg_txt = self.mav.statustext_encode(
+                severity=int(severity),
+                text=text_bytes,
+            )
+            return self.send_mavlink_packet(msg_txt, dest_addr)
+        return 0
+
+    def send_home_position(self, dest_addr: Optional[Tuple[str, int]] = None) -> int:
+        """Send HOME_POSITION (#242) and GPS_GLOBAL_ORIGIN (#49) to external GCS."""
+        if not HAVE_PYMAVLINK or self.mav is None:
+            return 0
+        bytes_sent = 0
+        prev_sys = self.mav.srcSystem
+        self.mav.srcSystem = 1  # Base anchor / system 1
+
+        if hasattr(self.mav, "home_position_encode"):
+            msg_home = self.mav.home_position_encode(
+                latitude=int(self.home_lat * 1e7),
+                longitude=int(self.home_lon * 1e7),
+                altitude=int(self.home_alt * 1000.0),
+                x=0.0,
+                y=0.0,
+                z=0.0,
+                q=[1.0, 0.0, 0.0, 0.0],
+                approach_x=0.0,
+                approach_y=0.0,
+                approach_z=0.0,
+            )
+            bytes_sent += self.send_mavlink_packet(msg_home, dest_addr)
+
+        if hasattr(self.mav, "gps_global_origin_encode"):
+            msg_origin = self.mav.gps_global_origin_encode(
+                latitude=int(self.home_lat * 1e7),
+                longitude=int(self.home_lon * 1e7),
+                altitude=int(self.home_alt * 1000.0),
+            )
+            bytes_sent += self.send_mavlink_packet(msg_origin, dest_addr)
+
+        self.mav.srcSystem = prev_sys
+        return bytes_sent
+
+    def poll_mavlink_commands(self) -> List[Dict[str, Any]]:
+        """Non-blocking poll of MAVLink socket for inbound command packets from Mission Planner/QGC.
+        Parses SET_POSITION_TARGET_GLOBAL_INT, SET_POSITION_TARGET_LOCAL_NED, and COMMAND_LONG."""
+        if not self.enable_mavlink or not HAVE_PYMAVLINK or self.mav is None:
+            return []
+
+        responses = []
+        while True:
+            try:
+                data, addr = self.mavlink_sock.recvfrom(4096)
+                if not data:
+                    break
+                self.last_client_mavlink_addr = addr
+
+                # Decode MAVLink message(s) from datagram
+                msgs = []
+                try:
+                    parsed = self.mav.parse_buffer(bytearray(data))
+                    if parsed:
+                        msgs.extend(parsed)
+                except Exception:
+                    pass
+
+                if not msgs:
+                    try:
+                        single = self.mav.decode(bytearray(data))
+                        if single:
+                            msgs.append(single)
+                    except Exception:
+                        pass
+
+                for msg in msgs:
+                    res = self.handle_mavlink_message(msg, addr)
+                    if res:
+                        responses.append(res)
+                        self.mavlink_commands_processed += 1
+
+            except (BlockingIOError, socket.error):
+                break
+            except Exception as e:
+                responses.append({"status": "ERROR", "error": str(e)})
+                break
+
+        return responses
+
+    def handle_mavlink_message(self, msg: Any, addr: Tuple[str, int]) -> Optional[Dict[str, Any]]:
+        """Process an individual inbound MAVLink message and execute corresponding C2 actions."""
+        msg_id = msg.get_msgId()
+
+        # 1. SET_POSITION_TARGET_GLOBAL_INT (#86) - Mission Planner "Fly Here" clicks
+        if msg_id == mavlink2.MAVLINK_MSG_ID_SET_POSITION_TARGET_GLOBAL_INT:
+            lat_deg = msg.lat_int / 1e7
+            lon_deg = msg.lon_int / 1e7
+            alt_m = float(msg.alt)
+
+            # Determine relative altitude Z
+            # MAV_FRAME_GLOBAL_RELATIVE_ALT_INT = 6, MAV_FRAME_GLOBAL_INT = 5
+            if msg.coordinate_frame in (6, 11):
+                z = alt_m
+            else:
+                z = (alt_m - self.home_alt) if alt_m > self.home_alt else alt_m
+
+            # Inverse equirectangular projection to local Cartesian meters relative to SIM home
+            delta_lat = lat_deg - self.home_lat
+            delta_lon = lon_deg - self.home_lon
+            y = delta_lat * 111139.0
+            x = delta_lon * 111139.0 * math.cos(math.radians(self.home_lat))
+
+            dist_horiz = math.hypot(x, y)
+            GEOFENCE_RADIUS = 120.0  # Max GCS RF range / arena boundary (m)
+
+            if dist_horiz > GEOFENCE_RADIUS:
+                # Reject click beyond tactical geofence
+                self.send_mavlink_statustext(
+                    f"[GEOFENCE] Target rejected: {dist_horiz:.0f}m > {GEOFENCE_RADIUS:.0f}m",
+                    severity=mavlink2.MAV_SEVERITY_WARNING,
+                    dest_addr=addr,
+                )
+                self.send_mavlink_ack(command=86, result=mavlink2.MAV_RESULT_DENIED, dest_addr=addr)
+                return {
+                    "status": "REJECTED_GEOFENCE",
+                    "msg": "SET_POSITION_TARGET_GLOBAL_INT",
+                    "dist": round(dist_horiz, 1),
+                    "pos": [round(x, 2), round(y, 2), round(z, 2)],
+                }
+
+            # Safe target: clamp altitude to safe corridor [5.0m, 45.0m]
+            z_clamped = max(5.0, min(45.0, z))
+            target_pos = [round(x, 2), round(y, 2), round(z_clamped, 2)]
+
+            self.sim.patrol_active = False
+            self.sim.set_target(target_pos)
+
+            self.send_mavlink_statustext(
+                f"[C2] Target accepted: X={x:.1f} Y={y:.1f} Z={z_clamped:.1f}",
+                severity=mavlink2.MAV_SEVERITY_INFO,
+                dest_addr=addr,
+            )
+            self.send_mavlink_ack(command=86, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
+
+            return {
+                "status": "OK",
+                "msg": "SET_POSITION_TARGET_GLOBAL_INT",
+                "target": target_pos,
+                "dist": round(dist_horiz, 1),
+            }
+
+        # 2. SET_POSITION_TARGET_LOCAL_NED (#84)
+        elif msg_id == mavlink2.MAVLINK_MSG_ID_SET_POSITION_TARGET_LOCAL_NED:
+            # NED: x = North, y = East, z = Down
+            x_sim = float(msg.y)
+            y_sim = float(msg.x)
+            z_sim = -float(msg.z)
+
+            dist_horiz = math.hypot(x_sim, y_sim)
+            GEOFENCE_RADIUS = 120.0
+
+            if dist_horiz > GEOFENCE_RADIUS:
+                self.send_mavlink_statustext(
+                    f"[GEOFENCE] Target rejected: {dist_horiz:.0f}m > {GEOFENCE_RADIUS:.0f}m",
+                    severity=mavlink2.MAV_SEVERITY_WARNING,
+                    dest_addr=addr,
+                )
+                self.send_mavlink_ack(command=84, result=mavlink2.MAV_RESULT_DENIED, dest_addr=addr)
+                return {"status": "REJECTED_GEOFENCE", "msg": "SET_POSITION_TARGET_LOCAL_NED", "dist": dist_horiz}
+
+            z_clamped = max(5.0, min(45.0, z_sim))
+            target_pos = [round(x_sim, 2), round(y_sim, 2), round(z_clamped, 2)]
+
+            self.sim.patrol_active = False
+            self.sim.set_target(target_pos)
+            self.send_mavlink_ack(command=84, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
+
+            return {"status": "OK", "msg": "SET_POSITION_TARGET_LOCAL_NED", "target": target_pos}
+
+        # 3. COMMAND_LONG (#76) - Mission Planner standard actions
+        elif msg_id == mavlink2.MAVLINK_MSG_ID_COMMAND_LONG:
+            cmd = msg.command
+
+            # MAV_CMD_NAV_TAKEOFF (24)
+            if cmd == mavlink2.MAV_CMD_NAV_TAKEOFF:
+                for d in self.sim.drones:
+                    d.armed = True
+                    if d.flight_state == "LANDED":
+                        d.flight_state = "TAKEOFF"
+                        d.target_altitude = 20.0
+                self.send_mavlink_statustext("[C2] Swarm TAKEOFF sequence engaged", dest_addr=addr)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
+                return {"status": "OK", "cmd": "MAV_CMD_NAV_TAKEOFF"}
+
+            # MAV_CMD_NAV_RETURN_TO_LAUNCH (20)
+            elif cmd == mavlink2.MAV_CMD_NAV_RETURN_TO_LAUNCH:
+                self.sim.command_rtb_hold()
+                self.send_mavlink_statustext("[C2] Swarm RTB (Overhead Marshal) engaged", dest_addr=addr)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
+                return {"status": "OK", "cmd": "MAV_CMD_NAV_RETURN_TO_LAUNCH"}
+
+            # MAV_CMD_NAV_LAND (21)
+            elif cmd == mavlink2.MAV_CMD_NAV_LAND:
+                queued = self.sim.command_land_swarm()
+                self.send_mavlink_statustext(f"[C2] Swarm LAND engaged ({len(queued)} queued)", dest_addr=addr)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
+                return {"status": "OK", "cmd": "MAV_CMD_NAV_LAND", "queued": queued}
+
+            # MAV_CMD_COMPONENT_ARM_DISARM (400)
+            elif cmd == mavlink2.MAV_CMD_COMPONENT_ARM_DISARM:
+                arm = bool(msg.param1 == 1.0)
+                for d in self.sim.drones:
+                    d.armed = arm
+                state_str = "ARMED" if arm else "DISARMED"
+                self.send_mavlink_statustext(f"[C2] Swarm {state_str}", dest_addr=addr)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
+                return {"status": "OK", "cmd": "MAV_CMD_COMPONENT_ARM_DISARM", "armed": arm}
+
+            # MAV_CMD_REQUEST_MESSAGE (512)
+            elif cmd == getattr(mavlink2, "MAV_CMD_REQUEST_MESSAGE", 512):
+                req_msg = int(msg.param1)
+                if req_msg == mavlink2.MAVLINK_MSG_ID_HOME_POSITION:
+                    self.send_home_position(dest_addr=addr)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
+                return {"status": "OK", "cmd": "MAV_CMD_REQUEST_MESSAGE", "requested": req_msg}
+
+            else:
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_UNSUPPORTED, dest_addr=addr)
+                return {"status": "UNSUPPORTED", "cmd": cmd}
+
+        return None
+
     def step(self, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Unified update step: polls commands, broadcasts JSON state, and sends MAVLink."""
         cmd_responses = self.poll_commands()
+        mav_responses = self.poll_mavlink_commands()
         tx_bytes = self.broadcast_telemetry(snapshot)
         mav_bytes = self.emit_mavlink_loopback()
 
         return {
-            "commands_processed": len(cmd_responses),
+            "commands_processed": len(cmd_responses) + len(mav_responses),
             "command_responses": cmd_responses,
+            "mavlink_responses": mav_responses,
             "telemetry_bytes_sent": tx_bytes,
             "mavlink_bytes_sent": mav_bytes,
         }

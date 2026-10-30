@@ -115,6 +115,9 @@ class SITLWorldEngine:
         drone_count: int = 8,
         enable_packet_loss: bool = False,
         seed: Optional[int] = None,
+        home_lat: Optional[float] = None,
+        home_lon: Optional[float] = None,
+        home_alt: Optional[float] = None,
     ):
         if seed is not None:
             np.random.seed(seed)
@@ -124,6 +127,12 @@ class SITLWorldEngine:
         self.enable_packet_loss: bool = enable_packet_loss
         self.comms_mode: str = "TETHERED_RELAY"  # "TETHERED_RELAY", "LEADER_FOLLOWER", "GOSSIP_CONSENSUS"
         self.rf_jamming_rate: float = 0.0        # Electronic warfare RF jamming rate [0.0, 0.5]
+
+        # Reference Geographic Home Anchor (Bubble 3: World Ground Truth)
+        # Default: Tokyo Bay / Shinagawa Canal Waterfront (Tennozu Isle)
+        self.home_lat: float = float(home_lat if home_lat is not None else 35.625971)
+        self.home_lon: float = float(home_lon if home_lon is not None else 139.734759)
+        self.home_alt: float = float(home_alt if home_alt is not None else 20.0)  # Meters AMSL
 
         # Global Mission State
         self.formation_mode: str = "ECHELON_ESCORT"  # ECHELON_ESCORT, NATURAL_FLOCK, ORBIT_VORTEX, PERIMETER_PATROL
@@ -1649,6 +1658,11 @@ class SITLWorldEngine:
         return {
             "sim_time": round(float(self.sim_time), 3),
             "dt": DT,
+            "home_position": {
+                "lat": self.home_lat,
+                "lon": self.home_lon,
+                "alt": self.home_alt,
+            },
             "brain": self.active_brain_name,
             "comms_mode": self.comms_mode,
             "rf_jamming": round(float(self.rf_jamming_rate), 2),
