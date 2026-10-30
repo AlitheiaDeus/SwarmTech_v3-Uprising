@@ -66,7 +66,15 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("viewport-container", html)
                 self.assertIn("left-panel", html)
                 self.assertIn("right-panel", html)
+                self.assertIn("tab-restore-left", html)
+                self.assertIn("tab-restore-right", html)
                 self.assertIn("event-feed-panel", html)
+
+            # Check css/style.css
+            async with session.get(f"http://127.0.0.1:{self.port}/css/style.css") as resp:
+                self.assertEqual(resp.status, 200)
+                css = await resp.text()
+                self.assertIn("edge-restore-tab", css)
 
             # Check js/app.js
             async with session.get(f"http://127.0.0.1:{self.port}/js/app.js") as resp:
@@ -79,6 +87,8 @@ class TestWebServer(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(resp.status, 200)
                 hud_js = await resp.text()
                 self.assertIn("tacticalHud", hud_js)
+                self.assertIn("setLeftPanelCollapsed", hud_js)
+                self.assertIn("tab-restore-left", hud_js)
 
     async def test_websocket_telemetry_streaming(self):
         """Verify WebSocket client receives continuous 60 FPS state frames."""

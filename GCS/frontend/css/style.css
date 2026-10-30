@@ -264,6 +264,69 @@ html, body {
   transform: translateX(360px);
 }
 
+/* ==============================================================================
+   Edge Panel Restore Tabs (FIX-03)
+   ============================================================================== */
+.edge-restore-tab {
+  position: absolute;
+  top: 56px;
+  height: 38px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-cyan);
+  color: var(--neon-cyan);
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6), inset 0 0 8px rgba(0, 240, 255, 0.1);
+  cursor: pointer;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.edge-restore-tab:hover {
+  background: rgba(0, 240, 255, 0.2);
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 16px rgba(0, 240, 255, 0.55), inset 0 0 10px rgba(0, 240, 255, 0.25);
+  text-shadow: 0 0 8px rgba(0, 240, 255, 0.8);
+}
+
+.edge-restore-tab.left-tab {
+  left: 0;
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+}
+
+.edge-restore-tab.left-tab:hover {
+  transform: translateX(4px);
+}
+
+.edge-restore-tab.right-tab {
+  right: 0;
+  border-right: none;
+  border-radius: 4px 0 0 4px;
+}
+
+.edge-restore-tab.right-tab:hover {
+  transform: translateX(-4px);
+}
+
+.edge-restore-tab.hidden {
+  display: none !important;
+}
+
+.edge-restore-tab .edge-icon {
+  font-size: 11px;
+  color: var(--neon-cyan);
+  text-shadow: 0 0 8px var(--neon-cyan);
+}
+
 .panel-header {
   height: 38px;
   background: rgba(0, 240, 255, 0.08);

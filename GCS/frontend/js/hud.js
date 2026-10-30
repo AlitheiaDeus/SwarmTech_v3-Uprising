@@ -197,20 +197,57 @@
             window.swarmClient?.send({ cmd: 'REBOOT_FLEET' });
         });
 
-        // Panel Toggle Buttons
+        // Panel Toggle & Edge Restoration Handlers (FIX-03)
+        const leftPanel = document.getElementById('left-panel');
+        const rightPanel = document.getElementById('right-panel');
+        const leftRestore = document.getElementById('tab-restore-left');
+        const rightRestore = document.getElementById('tab-restore-right');
+
+        function setLeftPanelCollapsed(collapsed) {
+            if (leftPanel) {
+                leftPanel.classList.toggle('collapsed', collapsed);
+            }
+            if (leftRestore) {
+                leftRestore.classList.toggle('hidden', !collapsed);
+            }
+        }
+
+        function setRightPanelCollapsed(collapsed) {
+            if (rightPanel) {
+                rightPanel.classList.toggle('collapsed', collapsed);
+            }
+            if (rightRestore) {
+                rightRestore.classList.toggle('hidden', !collapsed);
+            }
+        }
+
         const leftToggle = document.getElementById('toggle-left-panel');
         if (leftToggle) {
-            leftToggle.addEventListener('click', () => {
-                const p = document.getElementById('left-panel');
-                p?.classList.toggle('collapsed');
+            leftToggle.addEventListener('click', (e) => {
+                e.preventDefault();
+                const isCollapsed = leftPanel?.classList.contains('collapsed');
+                setLeftPanelCollapsed(!isCollapsed);
+            });
+        }
+        if (leftRestore) {
+            leftRestore.addEventListener('click', (e) => {
+                e.preventDefault();
+                setLeftPanelCollapsed(false);
             });
         }
 
         const rightToggle = document.getElementById('toggle-right-panel');
         if (rightToggle) {
-            rightToggle.addEventListener('click', () => {
-                const p = document.getElementById('right-panel');
-                p?.classList.toggle('collapsed');
+            rightToggle.addEventListener('click', (e) => {
+                e.preventDefault();
+                const isCollapsed = rightPanel?.classList.contains('collapsed');
+                setRightPanelCollapsed(!isCollapsed);
+            });
+        }
+        if (rightRestore) {
+            rightRestore.addEventListener('click', (e) => {
+                e.preventDefault();
+                setRightPanelCollapsed(false);
             });
         }
     }
