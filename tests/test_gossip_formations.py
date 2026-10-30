@@ -226,6 +226,35 @@ class TestGossipFormations(unittest.TestCase):
             f"Casualty triggered pinwheel spin: drifted by {math.degrees(casualty_drift):.1f} deg"
         )
 
+    def test_pad_launch_isolation_without_peers(self):
+        """Verify FIX-05: Scrambled drone on pad without peers in range holds station at Base muster."""
+        sim = SwarmSimulator(drone_count=4)
+        sim.set_comms_mode("GOSSIP_CONSENSUS")
+        sim.set_formation("ECHELON_ESCORT")
+
+        # Swarm is far away at 180m
+        for d in sim.drones:
+            d.pos = np.array([180.0, 0.0, 30.0], dtype=float)
+
+        # Scramble a 5th drone from the pad
+        new_drone = sim.launch_reinforcement()
+        self.assertTrue(new_drone.lost_link)
+        self.assertTrue(np.allclose(new_drone.lkp, [0.0, 0.0, 20.0]))
+
+        # Step sim for 300 ticks (5.0s)
+        for _ in range(300):
+            sim.step()
+
+        # New drone must stay at Base station (X, Y near 0, Z climbing/holding around 20m)
+        # It must NOT fly 180m out into a 5th echelon wing slot!
+        dist_base_xy = float(math.hypot(new_drone.pos[0], new_drone.pos[1]))
+        self.assertLess(
+            dist_base_xy,
+            10.0,
+            f"Isolated pad drone flew out toward distant formation! XY dist: {dist_base_xy:.1f}m"
+        )
+        self.assertGreaterEqual(new_drone.pos[2], 18.0)
+
 
 if __name__ == "__main__":
     unittest.main()

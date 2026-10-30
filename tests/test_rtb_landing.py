@@ -240,6 +240,33 @@ class TestAutonomousSwarmRTBLanding(unittest.TestCase):
             f"New drone must muster at local base [0, 0, 20], got {new_drone.lkp}"
         )
 
+    def test_universal_lost_link_loiter_and_autonomous_rtb(self):
+        """Verify FIX-05: Untethered wireless fleet beyond 120m initiates 15s loiter & automated RTB."""
+        sim = SwarmSimulator(drone_count=4)
+        sim.set_comms_mode("GOSSIP_CONSENSUS")
+        self.assertFalse(sim.tether_severed)
+
+        # Place entire fleet at 160m (outside 120m GCS dome)
+        for d in sim.drones:
+            d.pos = np.array([160.0, 0.0, 25.0], dtype=float)
+
+        self.assertFalse(sim.is_in_comms_range())
+
+        # Step 1 tick: universal lost-link timer should activate
+        sim.step(DT)
+        self.assertGreater(sim.lost_link_loiter_timer, 0.0, "Loiter timer must engage when out of range")
+        self.assertFalse(sim.overhead_marshal_active)
+
+        # Fast forward 15.5 seconds (930 ticks)
+        for _ in range(930):
+            sim.step(DT)
+
+        # Universal loiter expired: fleet must autonomously engage Stage 1 Overhead Marshal
+        self.assertTrue(sim.overhead_marshal_active, "Autonomous RTB must trigger after loiter expires")
+        self.assertTrue(sim.swarm_rtb_active)
+        self.assertEqual(sim.recovery_stage, "OVERHEAD_MARSHAL")
+        self.assertTrue(np.allclose(sim.target_pos, [0.0, 0.0, 25.0]))
+
 
 if __name__ == "__main__":
     unittest.main()

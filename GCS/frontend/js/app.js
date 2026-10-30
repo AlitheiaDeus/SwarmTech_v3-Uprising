@@ -948,7 +948,9 @@
                 }
 
                 // Update target kinematics for interpolation
-                entry.targetPos.set(d.pos[0], d.pos[1], d.pos[2]);
+                // When telemetry link is lost, freeze avatar at LKP (The Operator Airgap)
+                const renderPos = (d.lost_link && Array.isArray(d.lkp)) ? d.lkp : d.pos;
+                entry.targetPos.set(renderPos[0], renderPos[1], renderPos[2]);
                 entry.targetYaw = d.yaw || 0;
                 entry.targetPitch = d.pitch || 0;
                 entry.targetRoll = d.roll || 0;
@@ -982,6 +984,10 @@
                 } else if (d.status === 'BREAKAWAY_JETTISON') {
                     rotorColor = 0xFFAA00; // Bright amber jettison
                     rotorOpacity = 0.7;
+                    indicatorColor = 0xFFAA00;
+                } else if (d.lost_link) {
+                    rotorColor = 0xFFB800; // Amber ghost for lost-link LKP freeze
+                    rotorOpacity = 0.3;
                     indicatorColor = 0xFFAA00;
                 } else if (d.is_leader) {
                     rotorColor = COLORS.leader; // Bright neon amber

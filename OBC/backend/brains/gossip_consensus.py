@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 RADIO_RANGE: float = 120.0
 HEARTBEAT_INTERVAL: float = 0.1
 V_CRUISE: float = 12.0
+V_LKP: float = 6.0
 QUORUM_RATIO: float = 0.75  # 75% consensus threshold required before transition
 
 
@@ -291,6 +292,13 @@ class GossipConsensusBrain(BaseBrain):
         self._update_formation_heading(active_drones, consensus_target, dt)
 
         for drone in active_drones:
+            # 0. Lost-link failsafe: steer toward local LKP muster hold (TKT-41 & FIX-05)
+            if getattr(drone, "lost_link", False):
+                accs[drone.id] = self._steer_toward(
+                    drone.pos, drone.vel, drone.lkp, max_speed=V_LKP
+                )
+                continue
+
             state = self._get_peer_state(drone.id)
             drone.acknowledged_target = np.copy(state.active_target)
             k = sorted_ids.index(drone.id)

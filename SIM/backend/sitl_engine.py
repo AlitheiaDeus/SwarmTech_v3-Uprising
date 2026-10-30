@@ -512,13 +512,19 @@ class SITLWorldEngine:
 
         self.sim_time += dt
 
-        # 0b. Advance Doctrine A Lost-Link Loiter & Automated RTB Timer (TKT-16 / TKT-19)
-        if self.tether_severed and not self.swarm_rtb_active:
-            if self.lost_link_loiter_timer > 0.0:
+        # 0b. Advance Universal Lost-Link Loiter & Automated RTB Timer (TKT-16 / TKT-19 / FIX-05)
+        fleet_link_active = self.is_in_comms_range() and not (self.comms_mode == "TETHERED_RELAY" and self.tether_severed)
+        if not fleet_link_active and not self.swarm_rtb_active:
+            if self.lost_link_loiter_timer <= 0.0:
+                self.lost_link_loiter_timer = 30.0 if (self.comms_mode == "TETHERED_RELAY" and self.tether_severed) else 15.0
+            else:
                 self.lost_link_loiter_timer = max(0.0, self.lost_link_loiter_timer - dt)
                 if self.lost_link_loiter_timer <= 0.0:
                     # Loiter grace period expired: automated return to base (Stage 1 Overhead Marshal)
                     self.command_rtb_hold(force_autonomous=True)
+        elif fleet_link_active and not self.swarm_rtb_active and not self.tether_severed:
+            if self.lost_link_loiter_timer > 0.0:
+                self.lost_link_loiter_timer = 0.0
 
         # 0c. Advance Drone Breakaway Jettison State Machine (TKT-16 / TKT-27)
         for drone in self.drones:
@@ -811,6 +817,43 @@ class SITLWorldEngine:
             self.last_heartbeat_broadcast = self.sim_time
             broadcast_tick = True
 
+        if self.comms_mode == "GOSSIP_CONSENSUS":
+            # P2P Gossip Mesh: Drones with direct GCS link or multi-hop connection to GCS
+            living = [d for d in self.drones if not d.crashed]
+            direct_gcs_nodes = set()
+            for d in living:
+                d_gcs = float(np.linalg.norm(d.pos - self.tether_anchor))
+                d.rssi, d.link_quality = self.calculate_rssi(d_gcs, is_hardline=False)
+                if d_gcs <= RADIO_RANGE and not self.is_packet_dropped(d_gcs, is_hardline=False):
+                    direct_gcs_nodes.add(d.id)
+
+            # Connected component flood-fill through mesh
+            connected_to_gcs = set(direct_gcs_nodes)
+            changed = True
+            while changed:
+                changed = False
+                for d in living:
+                    if d.id not in connected_to_gcs:
+                        for active_id in list(connected_to_gcs):
+                            peer = next((p for p in living if p.id == active_id), None)
+                            if peer and float(np.linalg.norm(d.pos - peer.pos)) <= RADIO_RANGE:
+                                connected_to_gcs.add(d.id)
+                                changed = True
+                                break
+
+            for d in living:
+                if broadcast_tick:
+                    if d.id in connected_to_gcs:
+                        d.last_heartbeat_time = self.sim_time
+                        d.lost_link = False
+                        d.lkp = np.copy(d.pos)
+                        if d.status == "LOST_LINK":
+                            d.status = "ACTIVE"
+                if self.sim_time - d.last_heartbeat_time > LINK_TIMEOUT:
+                    d.lost_link = True
+                    d.status = "LOST_LINK"
+            return
+
         for drone in self.drones:
             if drone.crashed:
                 continue
@@ -847,7 +890,7 @@ class SITLWorldEngine:
                     in_range = dist_to_leader <= RADIO_RANGE
                     packet_dropped = self.is_packet_dropped(dist_to_leader, is_hardline=False)
 
-                    if in_range and not packet_dropped:
+                    if in_range and not packet_dropped and not getattr(current_leader, "lost_link", False):
                         drone.lkp = np.copy(current_leader.pos)
                         drone.last_heartbeat_time = self.sim_time
                         drone.lost_link = False
@@ -1295,6 +1338,8 @@ class SITLWorldEngine:
             if not drone.crashed and drone.flight_state not in ("LANDED", "DESCENDING"):
                 drone.flight_state = "OVERHEAD_HOLD"
                 drone.status = "OVERHEAD_HOLD"
+                drone.acknowledged_target = np.array([0.0, 0.0, 25.0], dtype=float)
+                drone.lkp = np.array([0.0, 0.0, 25.0], dtype=float)
         return {"status": "OK", "recovery_stage": self.recovery_stage}
 
     def cancel_rtb(self) -> None:

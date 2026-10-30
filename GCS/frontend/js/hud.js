@@ -512,7 +512,11 @@
         const failsafePill = document.getElementById('hud-failsafe-pill');
         const failsafeText = document.getElementById('hud-failsafe-text');
         if (failsafePill && failsafeText) {
-            if (frame.tether && frame.tether.severed) {
+            const isTetherSevered = frame.tether && frame.tether.severed;
+            const hasLostLinkLoiter = frame.lost_link_loiter_timer !== undefined && frame.lost_link_loiter_timer > 0;
+            const allDronesLostLink = Array.isArray(frame.drones) && frame.drones.length > 0 && frame.drones.every(d => d.crashed || d.lost_link);
+
+            if (isTetherSevered || hasLostLinkLoiter || allDronesLostLink || frame.swarm_rtb_active) {
                 failsafePill.classList.remove('hidden');
                 if (frame.recovery_stage === 'LANDING' || frame.recovery_stage === 'COMPLETE') {
                     failsafePill.className = 'status-pill failsafe-pill failsafe-rtb';
@@ -520,13 +524,15 @@
                 } else if (frame.swarm_rtb_active) {
                     failsafePill.className = 'status-pill failsafe-pill failsafe-rtb';
                     failsafeText.textContent = 'UPLINK LOST: DOCTRINE A SWARM RTB TO BASE ACTIVE';
-                } else if (frame.lost_link_loiter_timer !== undefined && frame.lost_link_loiter_timer > 0) {
+                } else if (hasLostLinkLoiter) {
                     failsafePill.className = 'status-pill failsafe-pill failsafe-loiter';
-                    const leaderTwoIc = frame.two_ic_id !== null && frame.two_ic_id !== undefined ? frame.two_ic_id : 1;
-                    failsafeText.textContent = `UPLINK SEVERED: 2IC #${leaderTwoIc} IN COMMAND | DOCTRINE A LOITER: ${frame.lost_link_loiter_timer.toFixed(1)}s -> RTB`;
-                } else {
+                    failsafeText.textContent = `RF HORIZON EXCEEDED (>120m): AUTONOMOUS LOITER ${frame.lost_link_loiter_timer.toFixed(1)}s -> RTB`;
+                } else if (isTetherSevered) {
                     failsafePill.className = 'status-pill failsafe-pill failsafe-untethered';
                     failsafeText.textContent = 'UNTETHERED CRUISE (MISSION RESUMED)';
+                } else {
+                    failsafePill.className = 'status-pill failsafe-pill failsafe-loiter';
+                    failsafeText.textContent = 'RF LINK LOST: FLEET OUTSIDE 120m HORIZON';
                 }
             } else {
                 failsafePill.classList.add('hidden');
