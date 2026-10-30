@@ -166,8 +166,15 @@ class SITLWorldEngine:
         key = brain_name.upper()
         if key in BRAIN_REGISTRY:
             self.active_brain_name = key
+            old_heading = getattr(self.brain, "formation_heading", 0.0)
+            old_init = getattr(self.brain, "heading_initialized", False)
+            old_formation = getattr(self.brain, "formation_mode", "ECHELON_ESCORT")
             self.brain = BRAIN_REGISTRY[key](self)
             self.brain.reset()
+            self.brain.formation_mode = old_formation
+            if old_init:
+                self.brain.formation_heading = old_heading
+                self.brain.heading_initialized = True
             if key == "GOSSIP_CONSENSUS":
                 self.comms_mode = "GOSSIP_CONSENSUS"
             elif key == "LEADER_FOLLOWER" and self.comms_mode == "GOSSIP_CONSENSUS":

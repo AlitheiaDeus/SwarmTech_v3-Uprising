@@ -5,6 +5,7 @@ and simulated MAVLink v2 loopback (port 14550).
 """
 
 import json
+import math
 import socket
 import unittest
 import time
@@ -341,6 +342,186 @@ class TestMavlinkBridge(unittest.TestCase):
             self.assertTrue(self.sim.overhead_marshal_active)
         finally:
             client_sock.close()
+
+    def test_param_request_list_multi_vehicle(self):
+        """Verify PARAM_REQUEST_LIST responds with PARAM_VALUE packets for target vehicle (e.g. sysid 2)."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((self.host, self.mav_port))
+        listener.settimeout(1.0)
+
+        try:
+            client_mav = mavlink2.MAVLink(None, srcSystem=255, srcComponent=1)
+            msg_list = client_mav.param_request_list_encode(
+                target_system=2,
+                target_component=1,
+            )
+            res = self.bridge.handle_mavlink_message(msg_list, (self.host, self.mav_port))
+            self.assertIsNotNone(res)
+            self.assertEqual(res["status"], "OK")
+            self.assertEqual(res["target_system"], 2)
+            self.assertGreater(res["param_count"], 0)
+
+            # Receive emitted PARAM_VALUE packets
+            mav = mavlink2.MAVLink(None)
+            param_names = []
+            for _ in range(res["param_count"]):
+                data, _ = listener.recvfrom(2048)
+                val_msg = mav.decode(bytearray(data))
+                self.assertEqual(val_msg.get_msgId(), mavlink2.MAVLINK_MSG_ID_PARAM_VALUE)
+                self.assertEqual(val_msg.get_srcSystem(), 2)
+                self.assertEqual(val_msg.param_count, res["param_count"])
+                param_names.append(val_msg.param_id)
+
+            self.assertIn("SYSID_THISMAV", param_names)
+            self.assertIn("FRAME_CLASS", param_names)
+        finally:
+            listener.close()
+
+    def test_param_request_read_and_set(self):
+        """Verify PARAM_REQUEST_READ and PARAM_SET operations."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((self.host, self.mav_port))
+        listener.settimeout(1.0)
+
+        try:
+            client_mav = mavlink2.MAVLink(None, srcSystem=255, srcComponent=1)
+
+            # 1. PARAM_REQUEST_READ by index
+            msg_read = client_mav.param_request_read_encode(
+                target_system=2,
+                target_component=1,
+                param_id=b"",
+                param_index=0,
+            )
+            res_read = self.bridge.handle_mavlink_message(msg_read, (self.host, self.mav_port))
+            self.assertEqual(res_read["status"], "OK")
+
+            data, _ = listener.recvfrom(2048)
+            mav = mavlink2.MAVLink(None)
+            val_msg = mav.decode(bytearray(data))
+            self.assertEqual(val_msg.get_srcSystem(), 2)
+            self.assertEqual(val_msg.param_id, "SYSID_THISMAV")
+
+            # 2. PARAM_SET
+            msg_set = client_mav.param_set_encode(
+                target_system=2,
+                target_component=1,
+                param_id=b"STAT_RUNTIME",
+                param_value=250.0,
+                param_type=mavlink2.MAV_PARAM_TYPE_UINT32,
+            )
+            res_set = self.bridge.handle_mavlink_message(msg_set, (self.host, self.mav_port))
+            self.assertEqual(res_set["status"], "OK")
+            self.assertEqual(res_set["param_value"], 250.0)
+        finally:
+            listener.close()
+
+    def test_set_home_location_multi_vehicle(self):
+        """Verify MAV_CMD_DO_SET_HOME and MAV_CMD_GET_HOME_POSITION accept commands for vehicle sysid 2."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((self.host, self.mav_port))
+        listener.settimeout(1.0)
+
+        try:
+            client_mav = mavlink2.MAVLink(None, srcSystem=255, srcComponent=1)
+
+            # 1. MAV_CMD_DO_SET_HOME
+            msg_set_home = client_mav.command_long_encode(
+                target_system=2,
+                target_component=1,
+                command=mavlink2.MAV_CMD_DO_SET_HOME,
+                confirmation=0,
+                param1=0, param2=0, param3=0, param4=0,
+                param5=35.6280, param6=139.7350, param7=25.0,
+            )
+            res = self.bridge.handle_mavlink_message(msg_set_home, (self.host, self.mav_port))
+            self.assertEqual(res["status"], "OK")
+            self.assertEqual(res["cmd"], "MAV_CMD_DO_SET_HOME")
+            self.assertEqual(res["sys_id"], 2)
+            self.assertAlmostEqual(self.bridge.home_lat, 35.6280, places=4)
+            self.assertAlmostEqual(self.bridge.home_lon, 139.7350, places=4)
+
+            # 2. MAV_CMD_GET_HOME_POSITION
+            msg_get_home = client_mav.command_long_encode(
+                target_system=2,
+                target_component=1,
+                command=getattr(mavlink2, "MAV_CMD_GET_HOME_POSITION", 410),
+                confirmation=0,
+                param1=0, param2=0, param3=0, param4=0, param5=0, param6=0, param7=0,
+            )
+            res_get = self.bridge.handle_mavlink_message(msg_get_home, (self.host, self.mav_port))
+            self.assertEqual(res_get["status"], "OK")
+            self.assertEqual(res_get["sys_id"], 2)
+        finally:
+            listener.close()
+
+    def test_global_position_ned_velocities_and_heading(self):
+        """Verify GLOBAL_POSITION_INT sends accurate NED velocities and clockwise heading from True North."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((self.host, self.mav_port))
+        listener.settimeout(1.0)
+
+        try:
+            # Set drone 0: X velocity (East) = 10.0 m/s, Y velocity (North) = 5.0 m/s, Z (Up) = 2.0 m/s
+            d0 = self.sim.drones[0]
+            d0.vel = np.array([10.0, 5.0, 2.0], dtype=float)
+            d0.yaw = math.atan2(5.0, 10.0)  # heading towards North-East
+
+            # Force emission of position packet
+            self.bridge.last_mavlink_pos = -1.0
+            bytes_sent = self.bridge.emit_mavlink_loopback()
+            self.assertGreater(bytes_sent, 0)
+
+            mav = mavlink2.MAVLink(None)
+            pos_found = False
+            att_found = False
+            vfr_found = False
+
+            # Inspect received packets
+            for _ in range(len(self.sim.drones) * 4):
+                try:
+                    data, _ = listener.recvfrom(2048)
+                    msg = mav.decode(bytearray(data))
+                    if msg.get_srcSystem() == 1:
+                        if msg.get_msgId() == mavlink2.MAVLINK_MSG_ID_GLOBAL_POSITION_INT:
+                            pos_found = True
+                            # vx must be North velocity (5.0 m/s = 500 cm/s)
+                            self.assertEqual(msg.vx, 500)
+                            # vy must be East velocity (10.0 m/s = 1000 cm/s)
+                            self.assertEqual(msg.vy, 1000)
+                            # vz must be Down velocity (-2.0 m/s = -200 cm/s)
+                            self.assertEqual(msg.vz, -200)
+                            # Heading clockwise from True North (between 0 and 90 deg = 0..9000 cdeg)
+                            self.assertGreater(msg.hdg, 0)
+                            self.assertLess(msg.hdg, 9000)
+                        elif msg.get_msgId() == mavlink2.MAVLINK_MSG_ID_ATTITUDE:
+                            att_found = True
+                        elif msg.get_msgId() == mavlink2.MAVLINK_MSG_ID_VFR_HUD:
+                            vfr_found = True
+                except (socket.timeout, BlockingIOError):
+                    break
+
+            self.assertTrue(pos_found, "GLOBAL_POSITION_INT not received")
+            self.assertTrue(att_found, "ATTITUDE not received")
+            self.assertTrue(vfr_found, "VFR_HUD not received")
+        finally:
+            listener.close()
 
 
 if __name__ == "__main__":

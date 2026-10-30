@@ -25,6 +25,8 @@ QUORUM_RATIO: float = 0.75  # 75% consensus threshold required before transition
 
 DEADBAND_RADIUS: float = 0.35
 MAX_SLEW_RATE: float = math.radians(45.0)
+FREEZE_SPEED: float = 0.5   # Cruising speed threshold below which heading freezes (m/s)
+FREEZE_DIST: float = 2.0    # Distance to target below which heading freezes against jitter (m)
 
 
 class DronePeerState:
@@ -349,24 +351,34 @@ class GossipConsensusBrain(BaseBrain):
         to_target = target_pos - apex_drone.pos
         dist_to_target = float(math.hypot(to_target[0], to_target[1]))
 
+        # 1. Initial bootstrap if heading has not been established yet
+        if not self.heading_initialized:
+            target_ref = getattr(self.sim, "target_pos", target_pos)
+            to_target_init = target_ref - apex_drone.pos
+            if speed_xy >= FREEZE_SPEED:
+                self.formation_heading = math.atan2(mean_vel[1], mean_vel[0])
+            else:
+                dist_xy = math.hypot(to_target_init[0], to_target_init[1])
+                if dist_xy > 1.0:
+                    self.formation_heading = math.atan2(to_target_init[1], to_target_init[0])
+                else:
+                    self.formation_heading = float(apex_drone.yaw)
+            self.heading_initialized = True
+            return
+
         patrol_active = getattr(self.sim, "patrol_active", False)
 
-        # Anti-jitter freeze: when swarm is settling, hovering near target, or decelerating
+        # 2. Anti-jitter freeze: when swarm is settling, hovering near target, or decelerating
         # Freeze heading at last stable cruising angle to prevent asymmetric wing pinwheel spin!
-        if not patrol_active and (speed_xy < 1.0 or dist_to_target < 2.5):
+        if not patrol_active and (speed_xy < FREEZE_SPEED or dist_to_target < FREEZE_DIST):
             return
 
-        # Target heading: follow flight velocity vector during cruise, or apex-to-target when starting
-        if speed_xy >= 1.0:
+        # 3. Target heading: follow flight velocity vector during cruise, or apex-to-target when starting
+        if speed_xy >= FREEZE_SPEED:
             desired_yaw = math.atan2(mean_vel[1], mean_vel[0])
-        elif dist_to_target >= 2.5:
+        elif dist_to_target > 1.0:
             desired_yaw = math.atan2(to_target[1], to_target[0])
         else:
-            return
-
-        if not self.heading_initialized:
-            self.formation_heading = desired_yaw
-            self.heading_initialized = True
             return
 
         yaw_diff = (desired_yaw - self.formation_heading + math.pi) % (2.0 * math.pi) - math.pi
@@ -632,6 +644,7 @@ class GossipConsensusBrain(BaseBrain):
         return {
             "brain_mode": "GOSSIP_CONSENSUS",
             "formation": self.formation_mode,
+            "formation_heading_deg": round(math.degrees(self.formation_heading) % 360.0, 1),
             "target_seq": self.current_seq,
             "propagating_drones": propagating_count,
             "consensus_reached": (propagating_count == 0),

@@ -268,6 +268,62 @@ class TestGossipFormations(unittest.TestCase):
         )
         self.assertGreaterEqual(new_drone.pos[2], 18.0)
 
+    def test_echelon_heading_agreement_leader_vs_gossip(self):
+        """Verify LeaderFollowerBrain and GossipConsensusBrain agree on echelon heading direction."""
+        target_north = [0.0, 50.0, 20.0]
+
+        # 1. Leader-Follower
+        sim_leader = SwarmSimulator(drone_count=5)
+        sim_leader.set_comms_mode("LEADER_FOLLOWER")
+        sim_leader.set_formation("ECHELON_ESCORT")
+        sim_leader.set_target(target_north)
+        for _ in range(10):
+            sim_leader.step()
+        heading_lf = sim_leader.brain.formation_heading
+
+        # 2. Gossip-Consensus
+        sim_gossip = SwarmSimulator(drone_count=5)
+        sim_gossip.set_comms_mode("GOSSIP_CONSENSUS")
+        sim_gossip.set_formation("ECHELON_ESCORT")
+        sim_gossip.set_target(target_north)
+        for _ in range(10):
+            sim_gossip.step()
+        heading_gc = sim_gossip.brain.formation_heading
+
+        # Heading difference must be nearly zero (both point North ~ pi/2)
+        heading_diff = abs((heading_lf - heading_gc + math.pi) % (2.0 * math.pi) - math.pi)
+        self.assertLess(
+            heading_diff,
+            0.15,
+            f"Leader ({math.degrees(heading_lf):.1f} deg) and Gossip ({math.degrees(heading_gc):.1f} deg) disagree on echelon heading!",
+        )
+
+    def test_brain_switch_preserves_heading_and_formation(self):
+        """Verify hot-swapping between Leader and Gossip preserves formation heading and mode."""
+        sim = SwarmSimulator(drone_count=5)
+        sim.set_comms_mode("LEADER_FOLLOWER")
+        sim.set_formation("ECHELON_ESCORT")
+        sim.set_target([40.0, 40.0, 25.0])
+
+        for _ in range(60):
+            sim.step()
+
+        heading_before = sim.brain.formation_heading
+        self.assertTrue(sim.brain.heading_initialized)
+
+        # Switch to Gossip Consensus
+        sim.set_comms_mode("GOSSIP_CONSENSUS")
+        self.assertEqual(sim.active_brain_name, "GOSSIP_CONSENSUS")
+        self.assertEqual(sim.brain.formation_mode, "ECHELON_ESCORT")
+        self.assertAlmostEqual(sim.brain.formation_heading, heading_before, places=3)
+        self.assertTrue(sim.brain.heading_initialized)
+
+        # Switch back to Leader Follower
+        sim.set_comms_mode("LEADER_FOLLOWER")
+        self.assertEqual(sim.active_brain_name, "LEADER_FOLLOWER")
+        self.assertEqual(sim.brain.formation_mode, "ECHELON_ESCORT")
+        self.assertAlmostEqual(sim.brain.formation_heading, heading_before, places=3)
+
 
 if __name__ == "__main__":
     unittest.main()

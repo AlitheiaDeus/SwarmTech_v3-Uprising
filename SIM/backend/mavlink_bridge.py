@@ -47,6 +47,18 @@ HOME_LAT: float = DEFAULT_HOME_LAT
 HOME_LON: float = DEFAULT_HOME_LON
 HOME_ALT: float = DEFAULT_HOME_ALT
 
+# Standard MAVLink parameters returned to Mission Planner / QGroundControl
+STANDARD_PARAMS: List[Tuple[str, int, Any]] = [
+    ("SYSID_THISMAV", 6, lambda s: float(s)),
+    ("FRAME_CLASS", 1, lambda s: 1.0),   # 1 = Quad
+    ("FRAME_TYPE", 1, lambda s: 1.0),    # 1 = X
+    ("ARMING_CHECK", 6, lambda s: 0.0),  # Checks disabled
+    ("STAT_RUNTIME", 5, lambda s: 120.0),
+    ("BATT_CAPACITY", 6, lambda s: 5000.0),
+    ("BATT_MONITOR", 1, lambda s: 4.0),
+    ("FS_GCS_ENABLE", 1, lambda s: 1.0),
+]
+
 
 # ==============================================================================
 # UDP & MAVLink Network Bridge
@@ -106,15 +118,30 @@ class MavlinkBridge:
         """Dynamic geographic latitude anchor queried from SIM world engine."""
         return getattr(self.sim, "home_lat", DEFAULT_HOME_LAT)
 
+    @home_lat.setter
+    def home_lat(self, val: float) -> None:
+        if hasattr(self.sim, "home_lat"):
+            self.sim.home_lat = float(val)
+
     @property
     def home_lon(self) -> float:
         """Dynamic geographic longitude anchor queried from SIM world engine."""
         return getattr(self.sim, "home_lon", DEFAULT_HOME_LON)
 
+    @home_lon.setter
+    def home_lon(self, val: float) -> None:
+        if hasattr(self.sim, "home_lon"):
+            self.sim.home_lon = float(val)
+
     @property
     def home_alt(self) -> float:
         """Dynamic geographic altitude anchor queried from SIM world engine."""
         return getattr(self.sim, "home_alt", DEFAULT_HOME_ALT)
+
+    @home_alt.setter
+    def home_alt(self, val: float) -> None:
+        if hasattr(self.sim, "home_alt"):
+            self.sim.home_alt = float(val)
 
     def broadcast_telemetry(self, snapshot: Optional[Dict[str, Any]] = None) -> int:
         """Broadcast simulation state JSON snapshot to UDP port 9000.
@@ -368,7 +395,7 @@ class MavlinkBridge:
                     pkt_hb = msg_hb.pack(self.mav)
                     bytes_sent += self.mavlink_sock.sendto(pkt_hb, (self.host, self.mavlink_port))
 
-                # 2. GLOBAL_POSITION_INT at 10 Hz (every 0.1s)
+                # 2. GLOBAL_POSITION_INT, ATTITUDE, and VFR_HUD at 10 Hz (every 0.1s)
                 if send_pos:
                     # Flat-Earth coordinate projection to GPS degrees relative to dynamic SIM home anchor
                     # 1 deg lat ~ 111139m, 1 deg lon ~ 111139 * cos(lat)m
@@ -377,9 +404,15 @@ class MavlinkBridge:
                     alt_m = self.home_alt + drone.pos[2]
                     rel_alt_m = drone.pos[2]
 
-                    # Convert heading to centidegrees [0..35999]
-                    yaw_deg = math.degrees(drone.yaw) % 360.0
-                    hdg_cdeg = int(yaw_deg * 100.0)
+                    # True navigation heading: clockwise azimuth from True North [0..360) deg
+                    # In sim, drone.yaw is counter-clockwise rad from East (+X)
+                    nav_heading_deg = (90.0 - math.degrees(drone.yaw)) % 360.0
+                    hdg_cdeg = int(round(nav_heading_deg * 100.0)) % 36000
+
+                    # NED velocities: North = pos[1] vel, East = pos[0] vel, Down = -pos[2] vel
+                    vx_north_cms = int(round(drone.vel[1] * 100.0))
+                    vy_east_cms = int(round(drone.vel[0] * 100.0))
+                    vz_down_cms = int(round(-drone.vel[2] * 100.0))
 
                     msg_pos = self.mav.global_position_int_encode(
                         time_boot_ms=int(current_time * 1000.0),
@@ -387,13 +420,44 @@ class MavlinkBridge:
                         lon=int(lon_deg * 1e7),
                         alt=int(alt_m * 1000.0),
                         relative_alt=int(rel_alt_m * 1000.0),
-                        vx=int(drone.vel[0] * 100.0),
-                        vy=int(drone.vel[1] * 100.0),
-                        vz=int(-drone.vel[2] * 100.0),  # NED convention: down is positive
+                        vx=vx_north_cms,
+                        vy=vy_east_cms,
+                        vz=vz_down_cms,
                         hdg=hdg_cdeg,
                     )
                     pkt_pos = msg_pos.pack(self.mav)
                     bytes_sent += self.mavlink_sock.sendto(pkt_pos, (self.host, self.mavlink_port))
+
+                    # 2b. ATTITUDE (#30) for Mission Planner artificial horizon & compass
+                    if hasattr(self.mav, "attitude_encode"):
+                        yaw_nav_rad = math.radians(nav_heading_deg)
+                        if yaw_nav_rad > math.pi:
+                            yaw_nav_rad -= 2.0 * math.pi
+                        msg_att = self.mav.attitude_encode(
+                            time_boot_ms=int(current_time * 1000.0),
+                            roll=float(drone.roll),
+                            pitch=float(drone.pitch),
+                            yaw=float(yaw_nav_rad),
+                            rollspeed=0.0,
+                            pitchspeed=0.0,
+                            yawspeed=0.0,
+                        )
+                        pkt_att = msg_att.pack(self.mav)
+                        bytes_sent += self.mavlink_sock.sendto(pkt_att, (self.host, self.mavlink_port))
+
+                    # 2c. VFR_HUD (#74) for Mission Planner HUD speed & climb
+                    if hasattr(self.mav, "vfr_hud_encode"):
+                        speed_xy = float(math.hypot(drone.vel[0], drone.vel[1]))
+                        msg_vfr = self.mav.vfr_hud_encode(
+                            airspeed=speed_xy,
+                            groundspeed=speed_xy,
+                            heading=int(round(nav_heading_deg)) % 360,
+                            throttle=50 if drone.flight_state in ("TAKEOFF", "CRUISE", "EN_ROUTE") else 0,
+                            alt=float(alt_m),
+                            climb=float(drone.vel[2]),
+                        )
+                        pkt_vfr = msg_vfr.pack(self.mav)
+                        bytes_sent += self.mavlink_sock.sendto(pkt_vfr, (self.host, self.mavlink_port))
 
             # 1b. Periodic HOME_POSITION broadcast (at 1 Hz) so Mission Planner auto-centers on SIM base
             if send_hb:
@@ -463,29 +527,43 @@ class MavlinkBridge:
             return self.send_mavlink_packet(msg_txt, dest_addr)
         return 0
 
-    def send_home_position(self, dest_addr: Optional[Tuple[str, int]] = None) -> int:
-        """Send HOME_POSITION (#242) and GPS_GLOBAL_ORIGIN (#49) to external GCS."""
+    def send_home_position(
+        self,
+        dest_addr: Optional[Tuple[str, int]] = None,
+        sys_id: Optional[int] = None,
+    ) -> int:
+        """Send HOME_POSITION (#242) and GPS_GLOBAL_ORIGIN (#49) to external GCS.
+        If sys_id is provided, sends for that system; otherwise broadcasts for all active swarm airframes."""
         if not HAVE_PYMAVLINK or self.mav is None:
             return 0
         bytes_sent = 0
         prev_sys = self.mav.srcSystem
-        self.mav.srcSystem = 1  # Base anchor / system 1
 
-        if hasattr(self.mav, "home_position_encode"):
-            msg_home = self.mav.home_position_encode(
-                latitude=int(self.home_lat * 1e7),
-                longitude=int(self.home_lon * 1e7),
-                altitude=int(self.home_alt * 1000.0),
-                x=0.0,
-                y=0.0,
-                z=0.0,
-                q=[1.0, 0.0, 0.0, 0.0],
-                approach_x=0.0,
-                approach_y=0.0,
-                approach_z=0.0,
-            )
-            bytes_sent += self.send_mavlink_packet(msg_home, dest_addr)
+        sys_ids = [sys_id] if sys_id is not None else [
+            int(d.id) + 1 for d in self.sim.drones if not d.crashed
+        ]
+        if not sys_ids:
+            sys_ids = [1]
 
+        for sid in sys_ids:
+            self.mav.srcSystem = sid
+            if hasattr(self.mav, "home_position_encode"):
+                msg_home = self.mav.home_position_encode(
+                    latitude=int(self.home_lat * 1e7),
+                    longitude=int(self.home_lon * 1e7),
+                    altitude=int(self.home_alt * 1000.0),
+                    x=0.0,
+                    y=0.0,
+                    z=0.0,
+                    q=[1.0, 0.0, 0.0, 0.0],
+                    approach_x=0.0,
+                    approach_y=0.0,
+                    approach_z=0.0,
+                )
+                bytes_sent += self.send_mavlink_packet(msg_home, dest_addr)
+
+        # GPS_GLOBAL_ORIGIN from system 1
+        self.mav.srcSystem = 1
         if hasattr(self.mav, "gps_global_origin_encode"):
             msg_origin = self.mav.gps_global_origin_encode(
                 latitude=int(self.home_lat * 1e7),
@@ -671,17 +749,144 @@ class MavlinkBridge:
                 self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
                 return {"status": "OK", "cmd": "MAV_CMD_COMPONENT_ARM_DISARM", "armed": arm}
 
+            # MAV_CMD_DO_SET_HOME (179)
+            elif cmd == getattr(mavlink2, "MAV_CMD_DO_SET_HOME", 179):
+                target_sys = getattr(msg, "target_system", 1) or 1
+                if msg.param1 == 0 and abs(msg.param5) > 0.1 and abs(msg.param6) > 0.1:
+                    self.home_lat = float(msg.param5)
+                    self.home_lon = float(msg.param6)
+                    if abs(msg.param7) > 0.1:
+                        self.home_alt = float(msg.param7)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
+                self.send_home_position(dest_addr=addr, sys_id=target_sys)
+                return {"status": "OK", "cmd": "MAV_CMD_DO_SET_HOME", "sys_id": target_sys}
+
+            # MAV_CMD_GET_HOME_POSITION (410)
+            elif cmd == getattr(mavlink2, "MAV_CMD_GET_HOME_POSITION", 410):
+                target_sys = getattr(msg, "target_system", 1) or 1
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
+                self.send_home_position(dest_addr=addr, sys_id=target_sys)
+                return {"status": "OK", "cmd": "MAV_CMD_GET_HOME_POSITION", "sys_id": target_sys}
+
             # MAV_CMD_REQUEST_MESSAGE (512)
             elif cmd == getattr(mavlink2, "MAV_CMD_REQUEST_MESSAGE", 512):
                 req_msg = int(msg.param1)
+                target_sys = getattr(msg, "target_system", 1) or 1
                 if req_msg == mavlink2.MAVLINK_MSG_ID_HOME_POSITION:
-                    self.send_home_position(dest_addr=addr)
+                    self.send_home_position(dest_addr=addr, sys_id=target_sys)
                 self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
                 return {"status": "OK", "cmd": "MAV_CMD_REQUEST_MESSAGE", "requested": req_msg}
 
             else:
                 self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_UNSUPPORTED, dest_addr=addr)
                 return {"status": "UNSUPPORTED", "cmd": cmd}
+
+        # 4. PARAM_REQUEST_LIST (#21) - Mission Planner parameters download
+        elif msg_id == mavlink2.MAVLINK_MSG_ID_PARAM_REQUEST_LIST:
+            target_sys = getattr(msg, "target_system", 1) or 1
+            prev_sys = self.mav.srcSystem
+            self.mav.srcSystem = target_sys
+            count = len(STANDARD_PARAMS)
+            for idx, (param_name, ptype, val_fn) in enumerate(STANDARD_PARAMS):
+                msg_val = self.mav.param_value_encode(
+                    param_id=param_name.encode("ascii")[:16],
+                    param_value=float(val_fn(target_sys)),
+                    param_type=int(ptype),
+                    param_count=count,
+                    param_index=idx,
+                )
+                self.send_mavlink_packet(msg_val, addr)
+            self.mav.srcSystem = prev_sys
+            return {
+                "status": "OK",
+                "msg": "PARAM_REQUEST_LIST",
+                "target_system": target_sys,
+                "param_count": count,
+            }
+
+        # 5. PARAM_REQUEST_READ (#20)
+        elif msg_id == mavlink2.MAVLINK_MSG_ID_PARAM_REQUEST_READ:
+            target_sys = getattr(msg, "target_system", 1) or 1
+            param_idx = getattr(msg, "param_index", -1)
+            raw_param_id = getattr(msg, "param_id", b"")
+            if isinstance(raw_param_id, str):
+                param_name = raw_param_id.strip("\x00")
+            elif isinstance(raw_param_id, bytes):
+                param_name = raw_param_id.decode("ascii", errors="ignore").strip("\x00")
+            else:
+                param_name = ""
+
+            matched = None
+            matched_idx = -1
+            if 0 <= param_idx < len(STANDARD_PARAMS):
+                matched = STANDARD_PARAMS[param_idx]
+                matched_idx = param_idx
+            elif param_name:
+                for idx, item in enumerate(STANDARD_PARAMS):
+                    if item[0] == param_name:
+                        matched = item
+                        matched_idx = idx
+                        break
+
+            if matched:
+                prev_sys = self.mav.srcSystem
+                self.mav.srcSystem = target_sys
+                msg_val = self.mav.param_value_encode(
+                    param_id=matched[0].encode("ascii")[:16],
+                    param_value=float(matched[2](target_sys)),
+                    param_type=int(matched[1]),
+                    param_count=len(STANDARD_PARAMS),
+                    param_index=matched_idx,
+                )
+                self.send_mavlink_packet(msg_val, addr)
+                self.mav.srcSystem = prev_sys
+
+            return {
+                "status": "OK",
+                "msg": "PARAM_REQUEST_READ",
+                "target_system": target_sys,
+                "param_id": param_name,
+                "param_index": param_idx,
+            }
+
+        # 6. PARAM_SET (#23)
+        elif msg_id == mavlink2.MAVLINK_MSG_ID_PARAM_SET:
+            target_sys = getattr(msg, "target_system", 1) or 1
+            raw_param_id = getattr(msg, "param_id", b"")
+            if isinstance(raw_param_id, str):
+                param_name = raw_param_id.strip("\x00")
+            elif isinstance(raw_param_id, bytes):
+                param_name = raw_param_id.decode("ascii", errors="ignore").strip("\x00")
+            else:
+                param_name = ""
+            param_val = float(getattr(msg, "param_value", 0.0))
+            param_type = int(getattr(msg, "param_type", 6))
+
+            matched_idx = -1
+            for idx, item in enumerate(STANDARD_PARAMS):
+                if item[0] == param_name:
+                    matched_idx = idx
+                    break
+
+            prev_sys = self.mav.srcSystem
+            self.mav.srcSystem = target_sys
+            msg_val = self.mav.param_value_encode(
+                param_id=param_name.encode("ascii")[:16],
+                param_value=param_val,
+                param_type=param_type,
+                param_count=len(STANDARD_PARAMS),
+                param_index=matched_idx if matched_idx >= 0 else 0,
+            )
+            self.send_mavlink_packet(msg_val, addr)
+            self.mav.srcSystem = prev_sys
+
+            return {
+                "status": "OK",
+                "msg": "PARAM_SET",
+                "target_system": target_sys,
+                "param_id": param_name,
+                "param_value": param_val,
+            }
 
         return None
 
