@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AlitheiaHive_v3-Uprising | Tactical WebGL GCS</title>
   <meta name="description" content="50/50 Autonomous Drone Swarm Simulation and Hardware-Accelerated 3D WebGL Ground Control Station.">
-  <link rel="stylesheet" href="css/style.css?v=3">
+  <link rel="stylesheet" href="css/style.css?v=4">
   
   <!-- Three.js (r128) & OrbitControls from CDN -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -60,14 +60,6 @@
   <!-- 3D WebGL Canvas Viewport -->
   <main id="viewport-container"></main>
 
-  <!-- Edge Panel Restore Tabs (FIX-03) -->
-  <button id="tab-restore-left" class="edge-restore-tab left-tab hidden" title="Expand Fleet Telemetry">
-    <span class="edge-icon">&#x25BA;</span> FLEET
-  </button>
-  <button id="tab-restore-right" class="edge-restore-tab right-tab hidden" title="Expand Command Deck">
-    COMMAND <span class="edge-icon">&#x25C4;</span>
-  </button>
-
   <!-- Left Tactical Panel: Real-Time Fleet Telemetry Cards -->
   <aside id="left-panel" class="tactical-panel">
     <div class="panel-header">
@@ -80,6 +72,10 @@
       <!-- Drone cards dynamically populated and updated in-place by hud.js -->
     </div>
   </aside>
+  <!-- Edge Panel Restore Tab: Left -->
+  <button id="tab-restore-left" class="edge-restore-tab left-tab" title="Expand Fleet Telemetry">
+    <span class="edge-icon">&#x25BA;</span> FLEET
+  </button>
 
   <!-- Right Tactical Panel: Mission Command Deck -->
   <aside id="right-panel" class="tactical-panel">
@@ -196,6 +192,10 @@
 
     </div>
   </aside>
+  <!-- Edge Panel Restore Tab: Right -->
+  <button id="tab-restore-right" class="edge-restore-tab right-tab" title="Expand Command Deck">
+    COMMAND <span class="edge-icon">&#x25C4;</span>
+  </button>
 
   <!-- Bottom Event Log Feed -->
   <section id="event-feed-panel">
@@ -217,8 +217,8 @@
   </div>
 
   <!-- Telemetry Client, Three.js Viewport App & Tactical HUD -->
-  <script src="js/ws_client.js"></script>
-  <script src="js/app.js"></script>
-  <script src="js/hud.js"></script>
+  <script src="js/ws_client.js?v=4"></script>
+  <script src="js/app.js?v=4"></script>
+  <script src="js/hud.js?v=4"></script>
 </body>
 </html>

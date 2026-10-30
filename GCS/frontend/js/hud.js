@@ -198,26 +198,25 @@
         });
 
         // Panel Toggle & Edge Restoration Handlers (FIX-03)
-        const leftPanel = document.getElementById('left-panel');
-        const rightPanel = document.getElementById('right-panel');
-        const leftRestore = document.getElementById('tab-restore-left');
-        const rightRestore = document.getElementById('tab-restore-right');
-
         function setLeftPanelCollapsed(collapsed) {
-            if (leftPanel) {
-                leftPanel.classList.toggle('collapsed', collapsed);
+            const lp = document.getElementById('left-panel');
+            const lr = document.getElementById('tab-restore-left');
+            if (lp) {
+                lp.classList.toggle('collapsed', collapsed);
             }
-            if (leftRestore) {
-                leftRestore.classList.toggle('hidden', !collapsed);
+            if (lr) {
+                lr.classList.toggle('visible', collapsed);
             }
         }
 
         function setRightPanelCollapsed(collapsed) {
-            if (rightPanel) {
-                rightPanel.classList.toggle('collapsed', collapsed);
+            const rp = document.getElementById('right-panel');
+            const rr = document.getElementById('tab-restore-right');
+            if (rp) {
+                rp.classList.toggle('collapsed', collapsed);
             }
-            if (rightRestore) {
-                rightRestore.classList.toggle('hidden', !collapsed);
+            if (rr) {
+                rr.classList.toggle('visible', collapsed);
             }
         }
 
@@ -225,10 +224,12 @@
         if (leftToggle) {
             leftToggle.addEventListener('click', (e) => {
                 e.preventDefault();
-                const isCollapsed = leftPanel?.classList.contains('collapsed');
+                const lp = document.getElementById('left-panel');
+                const isCollapsed = lp?.classList.contains('collapsed');
                 setLeftPanelCollapsed(!isCollapsed);
             });
         }
+        const leftRestore = document.getElementById('tab-restore-left');
         if (leftRestore) {
             leftRestore.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -240,10 +241,12 @@
         if (rightToggle) {
             rightToggle.addEventListener('click', (e) => {
                 e.preventDefault();
-                const isCollapsed = rightPanel?.classList.contains('collapsed');
+                const rp = document.getElementById('right-panel');
+                const isCollapsed = rp?.classList.contains('collapsed');
                 setRightPanelCollapsed(!isCollapsed);
             });
         }
+        const rightRestore = document.getElementById('tab-restore-right');
         if (rightRestore) {
             rightRestore.addEventListener('click', (e) => {
                 e.preventDefault();

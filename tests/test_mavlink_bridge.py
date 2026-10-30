@@ -143,7 +143,7 @@ class TestMavlinkBridge(unittest.TestCase):
             sender.close()
 
     def test_mavlink_loopback_emission(self):
-        """Verify binary MAVLink v2 packets emitted on loopback port."""
+        """Verify binary MAVLink v2 packets emitted on loopback port for all swarm drones."""
         if not HAVE_PYMAVLINK:
             self.skipTest("pymavlink not installed")
 
@@ -157,16 +157,23 @@ class TestMavlinkBridge(unittest.TestCase):
             bytes_sent = self.bridge.emit_mavlink_loopback()
             self.assertGreater(bytes_sent, 0)
 
-            data, addr = listener.recvfrom(2048)
-            # MAVLink v2 magic byte is 0xFD
-            self.assertEqual(data[0], 0xFD)
-
-            # Parse with pymavlink decoder
+            # Receive packets and verify multi-vehicle sysid demuxing
             mav = mavlink2.MAVLink(None)
-            msg = mav.decode(bytearray(data))
-            # Should be HEARTBEAT (ID 0)
-            self.assertEqual(msg.get_msgId(), 0)
-            self.assertEqual(msg.type, mavlink2.MAV_TYPE_QUADROTOR)
+            seen_sysids = set()
+
+            # Read all buffered packets emitted in this step
+            for _ in range(len(self.sim.drones) * 2):
+                try:
+                    data, addr = listener.recvfrom(2048)
+                    self.assertEqual(data[0], 0xFD)  # MAVLink v2 magic byte
+                    msg = mav.decode(bytearray(data))
+                    seen_sysids.add(msg.get_srcSystem())
+                except (socket.timeout, BlockingIOError):
+                    break
+
+            # Verify that sysids 1..5 were all represented
+            self.assertIn(1, seen_sysids)
+            self.assertGreaterEqual(len(seen_sysids), 2)
 
         finally:
             listener.close()

@@ -307,64 +307,75 @@ class MavlinkBridge:
 
     def emit_mavlink_loopback(self) -> int:
         """Emit simulated MAVLink v2 HEARTBEAT (1 Hz) and GLOBAL_POSITION_INT (10 Hz)
-        messages for the active leader on port 14550."""
+        messages for all active swarm drones on port 14550.
+        Each drone is assigned a unique MAVLink System ID: srcSystem = drone.id + 1."""
         if not self.enable_mavlink or not HAVE_PYMAVLINK or self.mav is None:
-            return 0
-
-        leader = self.sim.leader
-        if leader is None:
             return 0
 
         current_time = self.sim.sim_time
         bytes_sent = 0
 
-        # 1. HEARTBEAT at 1 Hz
-        if current_time - self.last_mavlink_heartbeat >= 1.0:
-            self.last_mavlink_heartbeat = current_time
-            msg_hb = self.mav.heartbeat_encode(
-                type=mavlink2.MAV_TYPE_QUADROTOR,
-                autopilot=mavlink2.MAV_AUTOPILOT_GENERIC,
-                base_mode=mavlink2.MAV_MODE_FLAG_SAFETY_ARMED | mavlink2.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
-                custom_mode=4,  # Auto / Guided
-                system_status=mavlink2.MAV_STATE_ACTIVE if not leader.crashed else mavlink2.MAV_STATE_CRITICAL,
-            )
-            pkt_hb = msg_hb.pack(self.mav)
-            bytes_sent += self.mavlink_sock.sendto(pkt_hb, (self.host, self.mavlink_port))
+        send_hb = (current_time - self.last_mavlink_heartbeat >= 1.0)
+        send_pos = (current_time - self.last_mavlink_pos >= 0.1)
 
-        # 2. GLOBAL_POSITION_INT at 10 Hz (every 0.1s)
-        if current_time - self.last_mavlink_pos >= 0.1:
+        if send_hb:
+            self.last_mavlink_heartbeat = current_time
+        if send_pos:
             self.last_mavlink_pos = current_time
 
-            # Flat-Earth coordinate projection to GPS degrees
-            # 1 deg lat ~ 111139m, 1 deg lon ~ 111139 * cos(lat)m
-            lat_deg = HOME_LAT + (leader.pos[1] / 111139.0)
-            lon_deg = HOME_LON + (leader.pos[0] / (111139.0 * math.cos(math.radians(HOME_LAT))))
-            alt_m = HOME_ALT + leader.pos[2]
-            rel_alt_m = leader.pos[2]
+        if send_hb or send_pos:
+            for drone in self.sim.drones:
+                if drone.crashed:
+                    continue
 
-            # Convert heading to centidegrees [0..35999]
-            yaw_deg = math.degrees(leader.yaw) % 360.0
-            hdg_cdeg = int(yaw_deg * 100.0)
+                sys_id = int(drone.id) + 1
+                self.mav.srcSystem = sys_id
 
-            msg_pos = self.mav.global_position_int_encode(
-                time_boot_ms=int(current_time * 1000.0),
-                lat=int(lat_deg * 1e7),
-                lon=int(lon_deg * 1e7),
-                alt=int(alt_m * 1000.0),
-                relative_alt=int(rel_alt_m * 1000.0),
-                vx=int(leader.vel[0] * 100.0),
-                vy=int(leader.vel[1] * 100.0),
-                vz=int(-leader.vel[2] * 100.0),  # NED convention: down is positive
-                hdg=hdg_cdeg,
-            )
-            pkt_pos = msg_pos.pack(self.mav)
-            bytes_sent += self.mavlink_sock.sendto(pkt_pos, (self.host, self.mavlink_port))
+                # 1. HEARTBEAT at 1 Hz
+                if send_hb:
+                    msg_hb = self.mav.heartbeat_encode(
+                        type=mavlink2.MAV_TYPE_QUADROTOR,
+                        autopilot=mavlink2.MAV_AUTOPILOT_GENERIC,
+                        base_mode=mavlink2.MAV_MODE_FLAG_SAFETY_ARMED | mavlink2.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
+                        custom_mode=4,  # Auto / Guided
+                        system_status=mavlink2.MAV_STATE_ACTIVE,
+                    )
+                    pkt_hb = msg_hb.pack(self.mav)
+                    bytes_sent += self.mavlink_sock.sendto(pkt_hb, (self.host, self.mavlink_port))
+
+                # 2. GLOBAL_POSITION_INT at 10 Hz (every 0.1s)
+                if send_pos:
+                    # Flat-Earth coordinate projection to GPS degrees
+                    # 1 deg lat ~ 111139m, 1 deg lon ~ 111139 * cos(lat)m
+                    lat_deg = HOME_LAT + (drone.pos[1] / 111139.0)
+                    lon_deg = HOME_LON + (drone.pos[0] / (111139.0 * math.cos(math.radians(HOME_LAT))))
+                    alt_m = HOME_ALT + drone.pos[2]
+                    rel_alt_m = drone.pos[2]
+
+                    # Convert heading to centidegrees [0..35999]
+                    yaw_deg = math.degrees(drone.yaw) % 360.0
+                    hdg_cdeg = int(yaw_deg * 100.0)
+
+                    msg_pos = self.mav.global_position_int_encode(
+                        time_boot_ms=int(current_time * 1000.0),
+                        lat=int(lat_deg * 1e7),
+                        lon=int(lon_deg * 1e7),
+                        alt=int(alt_m * 1000.0),
+                        relative_alt=int(rel_alt_m * 1000.0),
+                        vx=int(drone.vel[0] * 100.0),
+                        vy=int(drone.vel[1] * 100.0),
+                        vz=int(-drone.vel[2] * 100.0),  # NED convention: down is positive
+                        hdg=hdg_cdeg,
+                    )
+                    pkt_pos = msg_pos.pack(self.mav)
+                    bytes_sent += self.mavlink_sock.sendto(pkt_pos, (self.host, self.mavlink_port))
 
         # 3. MISSION_ITEM_REACHED (#46) when active target reached
         target_reached = self.sim.is_target_reached()
         if target_reached and not self.last_reached_sent:
             self.last_reached_sent = True
-            if hasattr(self.mav, "mission_item_reached_encode"):
+            if hasattr(self.mav, "mission_item_reached_encode") and self.sim.leader is not None:
+                self.mav.srcSystem = int(self.sim.leader.id) + 1
                 seq = getattr(self.sim, "rng_station_count", 0)
                 msg_reach = self.mav.mission_item_reached_encode(seq=seq)
                 pkt_reach = msg_reach.pack(self.mav)

@@ -71,16 +71,20 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
-  z-index: 10;
+  padding: 0 16px;
+  z-index: 50;
   font-size: 13px;
   letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .brand-section {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .brand-logo {
@@ -104,7 +108,9 @@ html, body {
 .status-section {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 16px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .status-pill {
@@ -269,20 +275,20 @@ html, body {
    ============================================================================== */
 .edge-restore-tab {
   position: absolute;
-  top: 56px;
-  height: 38px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-cyan);
+  top: 60px;
+  height: 40px;
+  background: rgba(6, 16, 25, 0.96);
+  border: 1px solid var(--neon-cyan);
   color: var(--neon-cyan);
   font-family: 'JetBrains Mono', 'Courier New', monospace;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.5px;
   backdrop-filter: blur(14px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6), inset 0 0 8px rgba(0, 240, 255, 0.1);
+  box-shadow: 0 0 16px rgba(0, 240, 255, 0.5), inset 0 0 8px rgba(0, 240, 255, 0.2);
   cursor: pointer;
-  z-index: 25;
-  display: flex;
+  z-index: 1000;
+  display: none; /* Controlled by CSS selector when panel has .collapsed */
   align-items: center;
   gap: 8px;
   padding: 0 14px;
@@ -290,17 +296,32 @@ html, body {
   user-select: none;
 }
 
+/* CSS-Driven Automatic Appearance When Panel Is Collapsed */
+#left-panel.collapsed + #tab-restore-left,
+#left-panel.collapsed ~ #tab-restore-left,
+body:has(#left-panel.collapsed) #tab-restore-left,
+#tab-restore-left.visible {
+  display: flex !important;
+}
+
+#right-panel.collapsed + #tab-restore-right,
+#right-panel.collapsed ~ #tab-restore-right,
+body:has(#right-panel.collapsed) #tab-restore-right,
+#tab-restore-right.visible {
+  display: flex !important;
+}
+
 .edge-restore-tab:hover {
-  background: rgba(0, 240, 255, 0.2);
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 16px rgba(0, 240, 255, 0.55), inset 0 0 10px rgba(0, 240, 255, 0.25);
-  text-shadow: 0 0 8px rgba(0, 240, 255, 0.8);
+  background: rgba(0, 240, 255, 0.25);
+  border-color: #ffffff;
+  box-shadow: 0 0 22px rgba(0, 240, 255, 0.8), inset 0 0 12px rgba(0, 240, 255, 0.4);
+  text-shadow: 0 0 10px rgba(0, 240, 255, 1);
 }
 
 .edge-restore-tab.left-tab {
   left: 0;
   border-left: none;
-  border-radius: 0 4px 4px 0;
+  border-radius: 0 6px 6px 0;
 }
 
 .edge-restore-tab.left-tab:hover {
@@ -310,15 +331,11 @@ html, body {
 .edge-restore-tab.right-tab {
   right: 0;
   border-right: none;
-  border-radius: 4px 0 0 4px;
+  border-radius: 6px 0 0 6px;
 }
 
 .edge-restore-tab.right-tab:hover {
   transform: translateX(-4px);
-}
-
-.edge-restore-tab.hidden {
-  display: none !important;
 }
 
 .edge-restore-tab .edge-icon {
