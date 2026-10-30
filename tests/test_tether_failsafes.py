@@ -272,6 +272,56 @@ class TestTetherFailsafes(unittest.TestCase):
             if not d.crashed:
                 self.assertEqual(d.flight_state, "CRUISE")
 
+    def test_comms_mode_switch_clears_loiter_timer_and_checks_drone0(self):
+        """Switching to wireless or mesh modes clears tether severance loiter timer,
+        and switching back to TETHERED_RELAY is rejected if primary Drone 0 is dead."""
+        sim = SwarmSimulator(drone_count=6)
+        sim.cut_tether()
+        self.assertTrue(sim.tether_severed)
+        self.assertEqual(sim.lost_link_loiter_timer, 30.0)
+
+        # Switch to P2P MESH
+        ok_p2p = sim.set_comms_mode("GOSSIP_CONSENSUS")
+        self.assertTrue(ok_p2p)
+        self.assertEqual(sim.comms_mode, "GOSSIP_CONSENSUS")
+        self.assertEqual(sim.lost_link_loiter_timer, 0.0)
+
+        # Telemetry snapshot must report severed=False in wireless modes
+        snap = sim.get_state_snapshot()
+        self.assertFalse(snap["tether"]["severed"])
+        self.assertFalse(snap["tether"]["deployed"])
+
+        # Stepping in P2P mode must not pause or re-engage the loiter timer
+        sim.step()
+        self.assertEqual(sim.lost_link_loiter_timer, 0.0)
+
+        # Kill Drone 0
+        sim.kill_drone(0)
+        self.assertTrue(sim.drones[0].crashed)
+
+        # Attempt to re-engage TETHERED_RELAY must fail cleanly because Drone 0 is destroyed
+        ok_tether = sim.set_comms_mode("TETHERED_RELAY")
+        self.assertFalse(ok_tether)
+        self.assertNotEqual(sim.comms_mode, "TETHERED_RELAY")
+
+    def test_boids_tether_avoidance_clears_segment(self):
+        """Drones running boids in Tethered Relay mode calculate 3D clearance from the cable segment."""
+        sim = SwarmSimulator(drone_count=6)
+        sim.set_formation("NATURAL_FLOCK")
+        self.assertEqual(sim.formation_mode, "NATURAL_FLOCK")
+
+        # Position Drone 1 right next to the tether cable (cable stretches from [0,0,0] to Drone 0 at [0,0,20])
+        sim.drones[0].pos = np.array([0.0, 0.0, 20.0], dtype=float)
+        sim.drones[1].pos = np.array([1.5, 0.0, 10.0], dtype=float)  # 1.5m perpendicular to cable
+        sim.drones[1].vel = np.array([-1.0, 0.0, 0.0], dtype=float)  # flying towards cable
+
+        brain = sim.brain
+        acc = brain._compute_boid_acceleration(sim.drones[1], sim.drones[0])
+
+        # Acceleration must strongly push Drone 1 outward (positive X) away from cable
+        self.assertGreater(acc[0], 0.0)
+        self.assertGreater(acc[0], 5.0, "Tether avoidance force must be strong enough to prevent collision")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -523,6 +523,99 @@ class TestMavlinkBridge(unittest.TestCase):
         finally:
             listener.close()
 
+    def test_nav_controller_output_bearing_and_distance(self):
+        """Verify NAV_CONTROLLER_OUTPUT (#62) is emitted with finite target bearing and waypoint distance."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((self.host, self.mav_port))
+        listener.settimeout(1.0)
+
+        try:
+            d0 = self.sim.drones[0]
+            d0.pos = np.array([0.0, 0.0, 20.0], dtype=float)
+            # Target 50m North (Y=50m)
+            d0.acknowledged_target = np.array([0.0, 50.0, 20.0], dtype=float)
+
+            self.bridge.last_mavlink_pos = -1.0
+            bytes_sent = self.bridge.emit_mavlink_loopback()
+            self.assertGreater(bytes_sent, 0)
+
+            mav = mavlink2.MAVLink(None)
+            nav_found = False
+
+            for _ in range(len(self.sim.drones) * 4):
+                try:
+                    data, _ = listener.recvfrom(2048)
+                    msg = mav.decode(bytearray(data))
+                    if msg.get_srcSystem() == 1 and msg.get_msgId() == getattr(mavlink2, "MAVLINK_MSG_ID_NAV_CONTROLLER_OUTPUT", 62):
+                        nav_found = True
+                        # Bearing straight North must be 0 deg
+                        self.assertEqual(msg.target_bearing, 0)
+                        # Distance must be 50 meters
+                        self.assertEqual(msg.wp_dist, 50)
+                except (socket.timeout, BlockingIOError):
+                    break
+
+            self.assertTrue(nav_found, "NAV_CONTROLLER_OUTPUT packet not received")
+        finally:
+            listener.close()
+
+    def test_command_ack_src_sys_matches_target(self):
+        """Verify COMMAND_ACK packet has srcSystem matching target_system so GCS recognizes ACK."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((self.host, self.mav_port))
+        listener.settimeout(1.0)
+
+        try:
+            # Send ACK for vehicle 3
+            bytes_sent = self.bridge.send_mavlink_ack(
+                command=176,  # MAV_CMD_DO_SET_MODE
+                result=mavlink2.MAV_RESULT_ACCEPTED,
+                dest_addr=(self.host, self.mav_port),
+                src_sys=3,
+            )
+            self.assertGreater(bytes_sent, 0)
+
+            data, _ = listener.recvfrom(2048)
+            mav = mavlink2.MAVLink(None)
+            msg = mav.decode(bytearray(data))
+            self.assertEqual(msg.get_msgId(), mavlink2.MAVLINK_MSG_ID_COMMAND_ACK)
+            self.assertEqual(msg.get_srcSystem(), 3, "COMMAND_ACK srcSystem must match commanded target vehicle sysid")
+        finally:
+            listener.close()
+
+    def test_set_home_position_ingestion(self):
+        """Verify SET_HOME_POSITION (#243) updates dynamic home coordinates and returns HOME_POSITION."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        client_mav = mavlink2.MAVLink(None, srcSystem=255, srcComponent=190)
+        # Set home coordinates: 35.6300 deg N, 139.7400 deg E, 25m alt
+        msg_set_home = client_mav.set_home_position_encode(
+            target_system=2,
+            latitude=int(35.6300 * 1e7),
+            longitude=int(139.7400 * 1e7),
+            altitude=int(25.0 * 1000),
+            x=0.0, y=0.0, z=0.0,
+            q=[1.0, 0.0, 0.0, 0.0],
+            approach_x=0.0, approach_y=0.0, approach_z=0.0,
+        )
+
+        res = self.bridge.handle_mavlink_message(msg_set_home, (self.host, self.mav_port))
+        self.assertEqual(res["status"], "OK")
+        self.assertEqual(res["msg"], "SET_HOME_POSITION")
+        self.assertEqual(res["sys_id"], 2)
+        self.assertAlmostEqual(self.bridge.home_lat, 35.6300, places=4)
+        self.assertAlmostEqual(self.bridge.home_lon, 139.7400, places=4)
+        self.assertAlmostEqual(self.bridge.home_alt, 25.0, places=1)
+
 
 if __name__ == "__main__":
     unittest.main()

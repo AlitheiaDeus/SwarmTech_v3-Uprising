@@ -512,7 +512,7 @@
         const failsafePill = document.getElementById('hud-failsafe-pill');
         const failsafeText = document.getElementById('hud-failsafe-text');
         if (failsafePill && failsafeText) {
-            const isTetherSevered = frame.tether && frame.tether.severed;
+            const isTetherSevered = frame.tether && frame.tether.severed && frame.comms_mode === 'TETHERED_RELAY';
             const hasLostLinkLoiter = frame.lost_link_loiter_timer !== undefined && frame.lost_link_loiter_timer > 0;
             const allDronesLostLink = Array.isArray(frame.drones) && frame.drones.length > 0 && frame.drones.every(d => d.crashed || d.lost_link);
 
@@ -526,7 +526,8 @@
                     failsafeText.textContent = 'UPLINK LOST: DOCTRINE A SWARM RTB TO BASE ACTIVE';
                 } else if (hasLostLinkLoiter) {
                     failsafePill.className = 'status-pill failsafe-pill failsafe-loiter';
-                    failsafeText.textContent = `RF HORIZON EXCEEDED (>120m): AUTONOMOUS LOITER ${frame.lost_link_loiter_timer.toFixed(1)}s -> RTB`;
+                    const loiterCause = (frame.comms_mode === 'TETHERED_RELAY') ? 'TETHER SEVERED' : 'RF HORIZON EXCEEDED';
+                    failsafeText.textContent = `${loiterCause}: AUTONOMOUS LOITER ${frame.lost_link_loiter_timer.toFixed(1)}s -> RTB`;
                 } else if (isTetherSevered) {
                     failsafePill.className = 'status-pill failsafe-pill failsafe-untethered';
                     failsafeText.textContent = 'UNTETHERED CRUISE (MISSION RESUMED)';

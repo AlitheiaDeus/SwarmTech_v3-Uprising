@@ -537,12 +537,42 @@ class GossipConsensusBrain(BaseBrain):
         elif drone.pos[2] > 40.0:
             a_z_guard -= max(0.0, (drone.pos[2] - 38.0) * 4.0 + drone.vel[2] * 2.0)
 
+        # 6. Tether Clearance: 3D Repulsion from tether umbilical if active
+        a_tether = np.zeros(3, dtype=float)
+        if (
+            getattr(self.sim, "comms_mode", "TETHERED_RELAY") == "TETHERED_RELAY"
+            and not getattr(self.sim, "tether_severed", False)
+            and not getattr(drone, "is_leader", False)
+        ):
+            current_leader = getattr(self.sim, "leader", None)
+            if current_leader is not None and hasattr(self.sim, "_dist_to_segment"):
+                d_perp, r_perp = self.sim._dist_to_segment(
+                    drone.pos, self.sim.tether_anchor, current_leader.pos
+                )
+                TETHER_ENVELOPE = 5.0
+                if d_perp < TETHER_ENVELOPE:
+                    push_dir = r_perp / max(0.01, d_perp)
+                    push_mag = (TETHER_ENVELOPE - d_perp) * 12.0
+                    v_closing = float(np.dot(drone.vel, -push_dir))
+                    if v_closing > 0:
+                        push_mag += v_closing * 4.0
+                    a_tether = push_dir * push_mag
+
+                    # Safety invariant: inhibit goal and cohesion forces pulling toward the cable
+                    inward_goal = float(np.dot(a_goal, -push_dir))
+                    if inward_goal > 0:
+                        a_goal -= (-push_dir) * inward_goal
+                    inward_coh = float(np.dot(a_coh, -push_dir))
+                    if inward_coh > 0:
+                        a_coh -= (-push_dir) * inward_coh
+
         # Weighted combination of Reynolds boid forces
         total_acc = (
             2.0 * a_goal +
             3.5 * a_sep +
             1.5 * a_align +
-            1.0 * a_coh
+            1.0 * a_coh +
+            a_tether
         )
         total_acc[2] += a_z_guard
 

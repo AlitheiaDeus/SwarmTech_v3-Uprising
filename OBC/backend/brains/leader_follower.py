@@ -526,15 +526,34 @@ class LeaderFollowerBrain(BaseBrain):
         elif drone.pos[2] > 40.0:
             a_z_guard -= max(0.0, (drone.pos[2] - 38.0) * 4.0 + drone.vel[2] * 2.0)
 
-        # 6. Tether Clearance: Repulsion from tether umbilical if active
+        # 6. Tether Clearance: 3D Repulsion from tether umbilical if active
         a_tether = np.zeros(3, dtype=float)
-        if getattr(self.sim, "comms_mode", "TETHERED_RELAY") == "TETHERED_RELAY" and not getattr(self.sim, "tether_severed", False):
-            anchor_xy = self.sim.tether_anchor[:2]
-            r_vec = drone.pos[:2] - anchor_xy
-            r_xy = float(np.linalg.norm(r_vec))
-            if r_xy < 4.0:
-                push = (4.0 - r_xy) * 5.0
-                a_tether[:2] = (r_vec / max(0.1, r_xy)) * push
+        if (
+            getattr(self.sim, "comms_mode", "TETHERED_RELAY") == "TETHERED_RELAY"
+            and not getattr(self.sim, "tether_severed", False)
+            and not drone.is_leader
+        ):
+            current_leader = getattr(self.sim, "leader", None)
+            if current_leader is not None and hasattr(self.sim, "_dist_to_segment"):
+                d_perp, r_perp = self.sim._dist_to_segment(
+                    drone.pos, self.sim.tether_anchor, current_leader.pos
+                )
+                TETHER_ENVELOPE = 5.0
+                if d_perp < TETHER_ENVELOPE:
+                    push_dir = r_perp / max(0.01, d_perp)
+                    push_mag = (TETHER_ENVELOPE - d_perp) * 12.0
+                    v_closing = float(np.dot(drone.vel, -push_dir))
+                    if v_closing > 0:
+                        push_mag += v_closing * 4.0
+                    a_tether = push_dir * push_mag
+
+                    # Safety invariant: inhibit goal and cohesion forces pulling toward the cable
+                    inward_goal = float(np.dot(a_goal, -push_dir))
+                    if inward_goal > 0:
+                        a_goal -= (-push_dir) * inward_goal
+                    inward_coh = float(np.dot(a_coh, -push_dir))
+                    if inward_coh > 0:
+                        a_coh -= (-push_dir) * inward_coh
 
         # Weighted combination of Reynolds boid forces
         total_acc = (

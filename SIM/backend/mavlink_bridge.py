@@ -459,6 +459,29 @@ class MavlinkBridge:
                         pkt_vfr = msg_vfr.pack(self.mav)
                         bytes_sent += self.mavlink_sock.sendto(pkt_vfr, (self.host, self.mavlink_port))
 
+                    # 2d. NAV_CONTROLLER_OUTPUT (#62) for Mission Planner "Direct to current WP" line
+                    if hasattr(self.mav, "nav_controller_output_encode"):
+                        drone_tgt = getattr(drone, "acknowledged_target", self.sim.target_pos)
+                        delta_xy = drone_tgt[:2] - drone.pos[:2]
+                        dist_to_wp = float(np.linalg.norm(delta_xy))
+                        if dist_to_wp > 0.1:
+                            tb_deg = int(round((90.0 - math.degrees(math.atan2(delta_xy[1], delta_xy[0]))) % 360.0))
+                        else:
+                            tb_deg = int(round(nav_heading_deg)) % 360
+
+                        msg_nav = self.mav.nav_controller_output_encode(
+                            nav_roll=float(drone.roll),
+                            nav_pitch=float(drone.pitch),
+                            nav_bearing=tb_deg,
+                            target_bearing=tb_deg,
+                            wp_dist=int(round(dist_to_wp)),
+                            alt_error=float(drone_tgt[2] - drone.pos[2]),
+                            aspd_error=0.0,
+                            xtrack_error=0.0,
+                        )
+                        pkt_nav = msg_nav.pack(self.mav)
+                        bytes_sent += self.mavlink_sock.sendto(pkt_nav, (self.host, self.mavlink_port))
+
             # 1b. Periodic HOME_POSITION broadcast (at 1 Hz) so Mission Planner auto-centers on SIM base
             if send_hb:
                 bytes_sent += self.send_home_position((self.host, self.mavlink_port))
@@ -497,35 +520,54 @@ class MavlinkBridge:
         command: int,
         result: int,
         dest_addr: Optional[Tuple[str, int]] = None,
+        src_sys: Optional[int] = None,
     ) -> int:
-        """Send a MAVLink COMMAND_ACK (#77) packet back to external GCS."""
+        """Send a MAVLink COMMAND_ACK (#77) packet back to external GCS.
+        Ensures srcSystem matches the commanded vehicle sysid so GCS recognizes ACK."""
         if not HAVE_PYMAVLINK or self.mav is None:
             return 0
-        if hasattr(self.mav, "command_ack_encode"):
-            msg_ack = self.mav.command_ack_encode(
-                command=int(command),
-                result=int(result),
-            )
-            return self.send_mavlink_packet(msg_ack, dest_addr)
-        return 0
+        prev_sys = self.mav.srcSystem
+        if src_sys is not None:
+            self.mav.srcSystem = int(src_sys)
+        try:
+            if hasattr(self.mav, "command_ack_encode"):
+                msg_ack = self.mav.command_ack_encode(
+                    command=int(command),
+                    result=int(result),
+                    progress=0,
+                    result_param2=0,
+                    target_system=getattr(self.mav, "srcSystem", 1),
+                    target_component=1,
+                )
+                return self.send_mavlink_packet(msg_ack, dest_addr)
+            return 0
+        finally:
+            self.mav.srcSystem = prev_sys
 
     def send_mavlink_statustext(
         self,
         text: str,
         severity: int = 6,  # MAV_SEVERITY_INFO
         dest_addr: Optional[Tuple[str, int]] = None,
+        src_sys: Optional[int] = None,
     ) -> int:
         """Send a MAVLink STATUSTEXT (#253) notification message to external GCS."""
         if not HAVE_PYMAVLINK or self.mav is None:
             return 0
-        if hasattr(self.mav, "statustext_encode"):
-            text_bytes = text[:50].encode("utf-8")
-            msg_txt = self.mav.statustext_encode(
-                severity=int(severity),
-                text=text_bytes,
-            )
-            return self.send_mavlink_packet(msg_txt, dest_addr)
-        return 0
+        prev_sys = self.mav.srcSystem
+        if src_sys is not None:
+            self.mav.srcSystem = int(src_sys)
+        try:
+            if hasattr(self.mav, "statustext_encode"):
+                text_bytes = text[:50].encode("utf-8")
+                msg_txt = self.mav.statustext_encode(
+                    severity=int(severity),
+                    text=text_bytes,
+                )
+                return self.send_mavlink_packet(msg_txt, dest_addr)
+            return 0
+        finally:
+            self.mav.srcSystem = prev_sys
 
     def send_home_position(
         self,
@@ -713,6 +755,7 @@ class MavlinkBridge:
         # 3. COMMAND_LONG (#76) - Mission Planner standard actions
         elif msg_id == mavlink2.MAVLINK_MSG_ID_COMMAND_LONG:
             cmd = msg.command
+            target_sys = getattr(msg, "target_system", 1) or 1
 
             # MAV_CMD_NAV_TAKEOFF (24)
             if cmd == mavlink2.MAV_CMD_NAV_TAKEOFF:
@@ -721,23 +764,23 @@ class MavlinkBridge:
                     if d.flight_state == "LANDED":
                         d.flight_state = "TAKEOFF"
                         d.target_altitude = 20.0
-                self.send_mavlink_statustext("[C2] Swarm TAKEOFF sequence engaged", dest_addr=addr)
-                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
-                return {"status": "OK", "cmd": "MAV_CMD_NAV_TAKEOFF"}
+                self.send_mavlink_statustext("[C2] Swarm TAKEOFF sequence engaged", dest_addr=addr, src_sys=target_sys)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr, src_sys=target_sys)
+                return {"status": "OK", "cmd": "MAV_CMD_NAV_TAKEOFF", "sys_id": target_sys}
 
             # MAV_CMD_NAV_RETURN_TO_LAUNCH (20)
             elif cmd == mavlink2.MAV_CMD_NAV_RETURN_TO_LAUNCH:
                 self.sim.command_rtb_hold()
-                self.send_mavlink_statustext("[C2] Swarm RTB (Overhead Marshal) engaged", dest_addr=addr)
-                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
-                return {"status": "OK", "cmd": "MAV_CMD_NAV_RETURN_TO_LAUNCH"}
+                self.send_mavlink_statustext("[C2] Swarm RTB (Overhead Marshal) engaged", dest_addr=addr, src_sys=target_sys)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr, src_sys=target_sys)
+                return {"status": "OK", "cmd": "MAV_CMD_NAV_RETURN_TO_LAUNCH", "sys_id": target_sys}
 
             # MAV_CMD_NAV_LAND (21)
             elif cmd == mavlink2.MAV_CMD_NAV_LAND:
                 queued = self.sim.command_land_swarm()
-                self.send_mavlink_statustext(f"[C2] Swarm LAND engaged ({len(queued)} queued)", dest_addr=addr)
-                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
-                return {"status": "OK", "cmd": "MAV_CMD_NAV_LAND", "queued": queued}
+                self.send_mavlink_statustext(f"[C2] Swarm LAND engaged ({len(queued)} queued)", dest_addr=addr, src_sys=target_sys)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr, src_sys=target_sys)
+                return {"status": "OK", "cmd": "MAV_CMD_NAV_LAND", "queued": queued, "sys_id": target_sys}
 
             # MAV_CMD_COMPONENT_ARM_DISARM (400)
             elif cmd == mavlink2.MAV_CMD_COMPONENT_ARM_DISARM:
@@ -745,41 +788,52 @@ class MavlinkBridge:
                 for d in self.sim.drones:
                     d.armed = arm
                 state_str = "ARMED" if arm else "DISARMED"
-                self.send_mavlink_statustext(f"[C2] Swarm {state_str}", dest_addr=addr)
-                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
-                return {"status": "OK", "cmd": "MAV_CMD_COMPONENT_ARM_DISARM", "armed": arm}
+                self.send_mavlink_statustext(f"[C2] Swarm {state_str}", dest_addr=addr, src_sys=target_sys)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr, src_sys=target_sys)
+                return {"status": "OK", "cmd": "MAV_CMD_COMPONENT_ARM_DISARM", "armed": arm, "sys_id": target_sys}
 
             # MAV_CMD_DO_SET_HOME (179)
             elif cmd == getattr(mavlink2, "MAV_CMD_DO_SET_HOME", 179):
-                target_sys = getattr(msg, "target_system", 1) or 1
                 if msg.param1 == 0 and abs(msg.param5) > 0.1 and abs(msg.param6) > 0.1:
                     self.home_lat = float(msg.param5)
                     self.home_lon = float(msg.param6)
                     if abs(msg.param7) > 0.1:
                         self.home_alt = float(msg.param7)
-                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr, src_sys=target_sys)
                 self.send_home_position(dest_addr=addr, sys_id=target_sys)
                 return {"status": "OK", "cmd": "MAV_CMD_DO_SET_HOME", "sys_id": target_sys}
 
             # MAV_CMD_GET_HOME_POSITION (410)
             elif cmd == getattr(mavlink2, "MAV_CMD_GET_HOME_POSITION", 410):
-                target_sys = getattr(msg, "target_system", 1) or 1
-                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr, src_sys=target_sys)
                 self.send_home_position(dest_addr=addr, sys_id=target_sys)
                 return {"status": "OK", "cmd": "MAV_CMD_GET_HOME_POSITION", "sys_id": target_sys}
 
             # MAV_CMD_REQUEST_MESSAGE (512)
             elif cmd == getattr(mavlink2, "MAV_CMD_REQUEST_MESSAGE", 512):
                 req_msg = int(msg.param1)
-                target_sys = getattr(msg, "target_system", 1) or 1
                 if req_msg == mavlink2.MAVLINK_MSG_ID_HOME_POSITION:
                     self.send_home_position(dest_addr=addr, sys_id=target_sys)
-                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr)
-                return {"status": "OK", "cmd": "MAV_CMD_REQUEST_MESSAGE", "requested": req_msg}
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr, src_sys=target_sys)
+                return {"status": "OK", "cmd": "MAV_CMD_REQUEST_MESSAGE", "requested": req_msg, "sys_id": target_sys}
 
             else:
-                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_UNSUPPORTED, dest_addr=addr)
-                return {"status": "UNSUPPORTED", "cmd": cmd}
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_UNSUPPORTED, dest_addr=addr, src_sys=target_sys)
+                return {"status": "UNSUPPORTED", "cmd": cmd, "sys_id": target_sys}
+
+        # 3b. SET_HOME_POSITION (#243)
+        elif msg_id == getattr(mavlink2, "MAVLINK_MSG_ID_SET_HOME_POSITION", 243):
+            target_sys = getattr(msg, "target_system", 1) or 1
+            lat_deg = getattr(msg, "latitude", 0) / 1e7
+            lon_deg = getattr(msg, "longitude", 0) / 1e7
+            alt_m = getattr(msg, "altitude", 0) / 1000.0
+            if abs(lat_deg) > 0.1 and abs(lon_deg) > 0.1:
+                self.home_lat = float(lat_deg)
+                self.home_lon = float(lon_deg)
+                if abs(alt_m) > 0.1:
+                    self.home_alt = float(alt_m)
+            self.send_home_position(dest_addr=addr, sys_id=target_sys)
+            return {"status": "OK", "msg": "SET_HOME_POSITION", "sys_id": target_sys}
 
         # 4. PARAM_REQUEST_LIST (#21) - Mission Planner parameters download
         elif msg_id == mavlink2.MAVLINK_MSG_ID_PARAM_REQUEST_LIST:

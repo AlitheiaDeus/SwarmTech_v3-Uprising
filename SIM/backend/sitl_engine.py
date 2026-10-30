@@ -186,17 +186,30 @@ class SITLWorldEngine:
         """Switch comms mode: TETHERED_RELAY, LEADER_FOLLOWER, or GOSSIP_CONSENSUS."""
         mode = mode_name.upper().replace("-", "_").replace(" ", "_")
         if mode in ("TETHERED_RELAY", "TETHER_RELAY", "TETHERED"):
+            # Check if Flagship Drone #0 is alive to anchor the physical umbilical
+            drone0 = next((d for d in self.drones if d.id == 0), None)
+            if drone0 is None or drone0.crashed:
+                # Cannot attach physical tether if primary flagship is destroyed
+                return False
+
             self.comms_mode = "TETHERED_RELAY"
+            self.tether_severed = False
+            drone0.tether_lost = False
+            drone0.tether_jettisoned = False
+            drone0.is_leader = True
+            self.lost_link_loiter_timer = 0.0
             if self.active_brain_name != "LEADER_FOLLOWER":
                 self.set_brain("LEADER_FOLLOWER")
             return True
         elif mode in ("LEADER_FOLLOWER", "WIRELESS_STAR", "STAR"):
             self.comms_mode = "LEADER_FOLLOWER"
+            self.lost_link_loiter_timer = 0.0  # Clear tether severance timer in wireless mode
             if self.active_brain_name != "LEADER_FOLLOWER":
                 self.set_brain("LEADER_FOLLOWER")
             return True
         elif mode in ("GOSSIP_CONSENSUS", "P2P_MESH", "MESH", "GOSSIP"):
             self.comms_mode = "GOSSIP_CONSENSUS"
+            self.lost_link_loiter_timer = 0.0  # Clear tether severance timer in mesh mode
             if self.active_brain_name != "GOSSIP_CONSENSUS":
                 self.set_brain("GOSSIP_CONSENSUS")
             return True
@@ -529,7 +542,7 @@ class SITLWorldEngine:
                 if self.lost_link_loiter_timer <= 0.0:
                     # Loiter grace period expired: automated return to base (Stage 1 Overhead Marshal)
                     self.command_rtb_hold(force_autonomous=True)
-        elif fleet_link_active and not self.swarm_rtb_active and not self.tether_severed:
+        elif fleet_link_active and not self.swarm_rtb_active:
             if self.lost_link_loiter_timer > 0.0:
                 self.lost_link_loiter_timer = 0.0
 
@@ -984,14 +997,19 @@ class SITLWorldEngine:
             d_perp, r_perp = self._dist_to_segment(
                 drone.pos, self.tether_anchor, current_leader.pos
             )
-            if d_perp < TETHER_AVOID_DIST:
+            TETHER_CLEARANCE = 4.5
+            if d_perp < TETHER_CLEARANCE:
                 if d_perp < 0.01:
                     # Coincident with cable: push in positive X
                     push_dir = np.array([1.0, 0.0, 0.0], dtype=float)
                 else:
                     push_dir = r_perp / d_perp
 
-                mag = 15.0 * ((TETHER_AVOID_DIST - d_perp) / TETHER_AVOID_DIST)
+                mag = 20.0 * ((TETHER_CLEARANCE - d_perp) / TETHER_CLEARANCE)
+                # Relative-velocity approach damping: brake incoming momentum before collision
+                v_closing = float(np.dot(drone.vel, -push_dir))
+                if v_closing > 0:
+                    mag += v_closing * 2.5
                 accs[drone.id] = push_dir * mag
 
         return accs
@@ -1581,16 +1599,20 @@ class SITLWorldEngine:
 
     def set_formation(self, mode: str) -> None:
         """Switch active formation flight mode."""
+        mode_upper = mode.upper().replace("-", "_").strip()
+        if mode_upper in ("BOIDS", "BOID", "FLOCK"):
+            mode_upper = "NATURAL_FLOCK"
+
         valid_modes = [
             "ECHELON_ESCORT",
             "NATURAL_FLOCK",
             "ORBIT_VORTEX",
             "PERIMETER_PATROL",
         ]
-        if mode in valid_modes:
-            self.formation_mode = mode
+        if mode_upper in valid_modes:
+            self.formation_mode = mode_upper
             if hasattr(self.brain, "formation_mode"):
-                self.brain.formation_mode = mode
+                self.brain.formation_mode = mode_upper
 
     def dispatch_target_uplink(self, target_pos: Union[List[float], np.ndarray]) -> Dict[str, Any]:
         """Attempt to deliver a commanded target waypoint across the simulated C2 link (tether or RF).
@@ -1781,7 +1803,7 @@ class SITLWorldEngine:
             "tether": {
                 "anchor": [round(float(v), 2) for v in self.tether_anchor],
                 "leader_id": current_leader.id if current_leader else -1,
-                "severed": self.tether_severed,
+                "severed": self.tether_severed if self.comms_mode == "TETHERED_RELAY" else False,
                 "length": round(tether_len, 2),
                 "deployed": (self.comms_mode == "TETHERED_RELAY"),
                 "visible": (self.comms_mode == "TETHERED_RELAY" and not self.tether_severed),
