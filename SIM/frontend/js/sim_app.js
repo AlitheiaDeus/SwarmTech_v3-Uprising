@@ -154,16 +154,16 @@
     }
 
     function setupRfHorizonDome() {
-        // 120m Radio Range Geodesic Wireframe Dome
+        // 120m Radio Range Geodesic Wireframe Dome (firmly anchored on ground plane Z=0)
         const domeGeom = new THREE.SphereGeometry(120, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+        domeGeom.rotateX(Math.PI / 2);
         const domeMat = new THREE.MeshBasicMaterial({
             color: COLORS.rfDome,
             wireframe: true,
             transparent: true,
-            opacity: 0.10,
+            opacity: 0.12,
         });
         rfDome = new THREE.Mesh(domeGeom, domeMat);
-        rfDome.rotation.x = Math.PI / 2;
         scene.add(rfDome);
     }
 
@@ -453,9 +453,6 @@
         requestAnimationFrame(animate);
 
         if (controls) controls.update();
-
-        // Rotate RF dome slowly
-        if (rfDome) rfDome.rotation.z += 0.0005;
 
         // FPS Calculation
         fpsCounter++;
