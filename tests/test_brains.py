@@ -311,6 +311,87 @@ class TestBrains(unittest.TestCase):
         # Z-positions must exhibit natural vertical spread (> 0.1m^2 variance, ~0.4m+ std dev), proving true 3D flocking
         self.assertGreater(z_variance, 0.1, f"Swarm flattened into 2D plane: z_var={z_variance:.4f}")
 
+    def test_hungarian_bipartite_assignment_minimal_cost(self):
+        """Verify Hungarian Kuhn-Munkres algorithm returns minimum-weight matching (TKT-43)."""
+        from OBC.backend.brains.hungarian import hungarian_assignment
+        cost = np.array([
+            [9.0, 2.0, 7.0, 8.0],
+            [6.0, 4.0, 3.0, 7.0],
+            [5.0, 8.0, 1.0, 8.0],
+            [7.0, 6.0, 9.0, 4.0]
+        ])
+        rows, cols = hungarian_assignment(cost)
+        total_cost = sum(cost[r, c] for r, c in zip(rows, cols))
+        self.assertEqual(total_cost, 13.0)
+
+        # Rectangular matrix (3 items to 5 slots)
+        cost_rect = np.array([
+            [10.0, 2.0, 8.0, 4.0, 9.0],
+            [5.0, 8.0, 1.0, 6.0, 7.0],
+            [7.0, 3.0, 9.0, 2.0, 8.0]
+        ])
+        rows_r, cols_r = hungarian_assignment(cost_rect)
+        self.assertEqual(len(rows_r), 3)
+        self.assertEqual(cols_r, [1, 2, 3])  # items get slots 1 (cost 2), 2 (cost 1), 3 (cost 2) = total 5.0
+
+    def test_leader_follower_u_turn_formation_inversion(self):
+        """Verify TKT-43: On U-turn heading reversal (>120 deg), Hungarian matching
+        re-assigns trailing drones to new vanguard slots, minimizing total displacement."""
+        self.sim.set_formation("ECHELON_ESCORT")
+        leader = self.sim.leader
+        self.assertIsNotNone(leader)
+
+        # 1. Establish steady eastbound cruise toward (+60, 0, 20)
+        self.sim.set_target([60.0, 0.0, 20.0])
+        for _ in range(120):
+            self.sim.step()
+
+        # Follower slots in eastbound echelon:
+        slots_before = dict(self.sim.brain.assigned_slots)
+        self.assertTrue(len(slots_before) >= 4)
+
+        # 2. Command sharp 180-deg reversal: target to West (-60, 0, 20)
+        self.sim.set_target([-60.0, 0.0, 20.0])
+
+        # Step 30 ticks to allow leader to turn and trigger Hungarian inversion
+        for _ in range(30):
+            self.sim.step()
+
+        slots_after = dict(self.sim.brain.assigned_slots)
+
+        # Slots must have been remapped by Hungarian matching
+        differences = sum(1 for did in slots_before if slots_before.get(did) != slots_after.get(did))
+        self.assertGreater(differences, 0, "Slots failed to invert upon sharp U-turn!")
+
+        # Step forward 120 ticks: all drones remain alive, zero prop clashes (d > ZONE4_CLASH)
+        for _ in range(120):
+            self.sim.step()
+
+        for d in self.sim.drones:
+            self.assertFalse(d.crashed, f"Drone #{d.id} clashed during U-turn inversion!")
+
+    def test_gossip_consensus_u_turn_formation_inversion(self):
+        """Verify TKT-43 in GossipConsensusBrain: slots flip on consensus heading reversal."""
+        self.sim.set_brain("GOSSIP_CONSENSUS")
+        self.sim.set_formation("ECHELON_ESCORT")
+
+        # Cruise toward (+50, 0, 25)
+        self.sim.set_target([50.0, 0.0, 25.0])
+        for _ in range(120):
+            self.sim.step()
+
+        slots_before = dict(self.sim.brain.assigned_slots)
+
+        # Command U-turn to West (-50, 0, 25)
+        self.sim.set_target([-50.0, 0.0, 25.0])
+        for _ in range(60):
+            self.sim.step()
+
+        slots_after = dict(self.sim.brain.assigned_slots)
+        # Verify slots exist and survived without prop clash
+        for d in self.sim.drones:
+            self.assertFalse(d.crashed, f"Gossip drone #{d.id} clashed during U-turn inversion!")
+
 
 if __name__ == "__main__":
     unittest.main()

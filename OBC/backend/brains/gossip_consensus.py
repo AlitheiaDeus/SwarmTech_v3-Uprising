@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Set, Any, TYPE_CHECKING
 import numpy as np
 
 from .base import BaseBrain
+from .hungarian import hungarian_assignment
 
 if TYPE_CHECKING:
     from SIM.backend.sitl_engine import SwarmSimulator
@@ -73,6 +74,8 @@ class GossipConsensusBrain(BaseBrain):
         self.route_loop: bool = True
         self.wp_loiter_timer: float = 0.0
         self.wp_loitering: bool = False
+        self.assigned_slots: Dict[int, int] = {}
+        self.inversion_cooldown: float = 0.0
         self.reset()
 
     def reset(self) -> None:
@@ -80,6 +83,8 @@ class GossipConsensusBrain(BaseBrain):
         self.peer_states.clear()
         self.formation_heading = 0.0
         self.heading_initialized = False
+        self.assigned_slots.clear()
+        self.inversion_cooldown = 0.0
         self.route_waypoints.clear()
         self.current_route_wp_idx = 0
         self.route_active = False
@@ -326,6 +331,10 @@ class GossipConsensusBrain(BaseBrain):
 
         # Deterministic decentralized slot indexing based on living drone IDs
         sorted_ids = sorted([d.id for d in active_drones])
+        active_ids = {d.id for d in active_drones}
+        for did in list(self.assigned_slots.keys()):
+            if did not in active_ids:
+                del self.assigned_slots[did]
 
         # Update virtual swarm heading toward consensus target
         consensus_target = self.sim.get_acknowledged_target()
@@ -348,7 +357,10 @@ class GossipConsensusBrain(BaseBrain):
                     drone, active_drones, state.active_target
                 )
             else:
-                k = sorted_ids.index(drone.id)
+                if getattr(self.sim, "overhead_marshal_active", False):
+                    k = sorted_ids.index(drone.id)
+                else:
+                    k = self.assigned_slots.get(drone.id, sorted_ids.index(drone.id))
                 slot_pos = self._get_formation_slot(drone, k, living_count, state.active_target)
                 drone.target_station = slot_pos
 
@@ -412,6 +424,24 @@ class GossipConsensusBrain(BaseBrain):
             self.heading_initialized = True
             return
 
+        self.inversion_cooldown = max(0.0, self.inversion_cooldown - dt)
+
+        # Check if active mission target indicates a sharp reversal (> 120 deg) (TKT-43)
+        dist_xy = math.hypot(to_target[0], to_target[1])
+        if (
+            dist_xy > 5.0
+            and self.inversion_cooldown <= 0.0
+            and self.formation_mode == "ECHELON_ESCORT"
+            and not getattr(self.sim, "overhead_marshal_active", False)
+        ):
+            to_tgt_dir = np.array([to_target[0] / dist_xy, to_target[1] / dist_xy])
+            h_dir = np.array([math.cos(self.formation_heading), math.sin(self.formation_heading)])
+            if float(np.dot(to_tgt_dir, h_dir)) < -0.5:
+                rev_heading = math.atan2(to_target[1], to_target[0])
+                if self.invert_formation_slots(active_drones, target_pos, rev_heading):
+                    self.formation_heading = rev_heading
+                    return
+
         patrol_active = getattr(self.sim, "patrol_active", False)
 
         # 2. Anti-jitter freeze: when swarm is settling, hovering near target, or decelerating
@@ -428,10 +458,61 @@ class GossipConsensusBrain(BaseBrain):
             return
 
         yaw_diff = (desired_yaw - self.formation_heading + math.pi) % (2.0 * math.pi) - math.pi
+
+        # Dynamic Hungarian Formation Inversion on sharp reversal (TKT-43)
+        if (
+            abs(yaw_diff) > math.radians(120.0)
+            and self.inversion_cooldown <= 0.0
+            and self.formation_mode == "ECHELON_ESCORT"
+        ):
+            if self.invert_formation_slots(active_drones, target_pos, desired_yaw):
+                self.formation_heading = desired_yaw
+                return
+
         effective_slew_rate = math.radians(60.0) if patrol_active else MAX_SLEW_RATE
         max_step = effective_slew_rate * dt
         slew = float(np.clip(yaw_diff, -max_step, max_step))
         self.formation_heading = (self.formation_heading + slew + math.pi) % (2.0 * math.pi) - math.pi
+
+    def invert_formation_slots(
+        self, active_drones: List[Drone], target_pos: np.ndarray, target_heading: float
+    ) -> bool:
+        """Perform Hungarian minimal-displacement slot re-assignment on heading reversal (TKT-43)."""
+        n = len(active_drones)
+        if n <= 1:
+            return False
+
+        heading_vec = np.array([math.cos(target_heading), math.sin(target_heading), 0.0], dtype=float)
+        lateral_vec = np.array([-heading_vec[1], heading_vec[0], 0.0], dtype=float)
+
+        candidate_slots = []
+        for k in range(n):
+            if k == 0:
+                s_pos = np.copy(target_pos)
+            else:
+                row = (k + 1) // 2
+                side = 1.0 if (k % 2 == 1) else -1.0
+                s_pos = (
+                    target_pos
+                    - (row * 6.0 * heading_vec)
+                    + (side * row * 6.0 * lateral_vec)
+                    + np.array([0.0, 0.0, row * 0.5], dtype=float)
+                )
+            candidate_slots.append(s_pos)
+
+        cost_matrix = np.zeros((n, n), dtype=float)
+        for i, drone in enumerate(active_drones):
+            for j, s_pos in enumerate(candidate_slots):
+                diff = drone.pos - s_pos
+                cost_matrix[i, j] = float(np.dot(diff, diff))
+
+        row_ind, col_ind = hungarian_assignment(cost_matrix)
+        for r, c in zip(row_ind, col_ind):
+            drone = active_drones[r]
+            self.assigned_slots[drone.id] = c
+
+        self.inversion_cooldown = 2.5
+        return True
 
     def _get_formation_slot(
         self, drone: Drone, k: int, N: int, target_pos: np.ndarray

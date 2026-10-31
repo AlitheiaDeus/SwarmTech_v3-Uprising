@@ -45,9 +45,9 @@ kanban
     tkt37["SITL Provider (ArduPilot / PX4)"]@{ ticket: '[TKT-37]', priority: 'Low' }
     tkt38["Hardware Provider (Radio Modem)"]@{ ticket: '[TKT-38]', priority: 'Very Low' }
   todo["Todo (Active Pipeline)"]
-    tkt43["Dynamic Hungarian Formation Inversion"]@{ ticket: '[TKT-43]', priority: 'High' }
   in_progress["In Progress (WIP = 1)"]
   completed["Completed (Fresh / Review)"]
+    tkt43["Dynamic Hungarian Formation Inversion"]@{ ticket: '[TKT-43]', priority: 'High' }
     tkt52["Tactical GNSS Denial & Dead-Reckoning"]@{ ticket: '[TKT-52]', priority: 'High' }
     tkt42["Batched ATC Pad Recovery"]@{ ticket: '[TKT-42]', priority: 'High' }
     tkt41["Cold-Start Pad Scramble"]@{ ticket: '[TKT-41]', priority: 'High' }

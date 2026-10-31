@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Any, TYPE_CHECKING
 import numpy as np
 
 from .base import BaseBrain
+from .hungarian import hungarian_assignment
 
 if TYPE_CHECKING:
     from SIM.backend.sitl_engine import SwarmSimulator
@@ -44,12 +45,14 @@ class LeaderFollowerBrain(BaseBrain):
         self.formation_heading: float = 0.0
         self.heading_initialized: bool = False
         self.assigned_slots: Dict[int, int] = {}
+        self.inversion_cooldown: float = 0.0
 
     def reset(self) -> None:
         self.last_heartbeat_broadcast = -1.0
         self.formation_heading = 0.0
         self.heading_initialized = False
         self.assigned_slots.clear()
+        self.inversion_cooldown = 0.0
 
     def on_succession(self, old_leader: Optional[Drone], new_leader: Drone) -> None:
         """Deconflict slot assignments during leadership transitions (TKT-15).
@@ -312,6 +315,19 @@ class LeaderFollowerBrain(BaseBrain):
                 self.heading_initialized = True
             return
 
+        self.inversion_cooldown = max(0.0, self.inversion_cooldown - dt)
+
+        # Check if active mission target indicates a sharp reversal (> 120 deg) (TKT-43)
+        dist_xy = math.hypot(to_target[0], to_target[1])
+        if dist_xy > 5.0 and self.inversion_cooldown <= 0.0 and self.formation_mode == "ECHELON_ESCORT":
+            to_tgt_dir = np.array([to_target[0] / dist_xy, to_target[1] / dist_xy])
+            h_dir = np.array([math.cos(self.formation_heading), math.sin(self.formation_heading)])
+            if float(np.dot(to_tgt_dir, h_dir)) < -0.5:
+                rev_heading = math.atan2(to_target[1], to_target[0])
+                if self.invert_formation_slots(rev_heading):
+                    self.formation_heading = rev_heading
+                    return
+
         patrol_active = getattr(self.sim, "patrol_active", False)
 
         # Anti-jitter freeze: when leader decelerates/reverses near stationary target or slows down
@@ -331,9 +347,71 @@ class LeaderFollowerBrain(BaseBrain):
         # Apply bounded slew filter (<= 45 deg/s in standard cruise, <= 60 deg/s in patrol pursuit)
         effective_slew_rate = math.radians(60.0) if patrol_active else MAX_SLEW_RATE
         yaw_diff = (target_heading - self.formation_heading + math.pi) % (2.0 * math.pi) - math.pi
+
+        # Dynamic Hungarian Formation Inversion on sharp heading reversal (TKT-43)
+        if (
+            abs(yaw_diff) > math.radians(120.0)
+            and self.inversion_cooldown <= 0.0
+            and self.formation_mode == "ECHELON_ESCORT"
+            and not getattr(self.sim, "overhead_marshal_active", False)
+        ):
+            if self.invert_formation_slots(target_heading):
+                self.formation_heading = target_heading
+                return
+
         max_step = effective_slew_rate * dt
         slew = float(np.clip(yaw_diff, -max_step, max_step))
         self.formation_heading = (self.formation_heading + slew + math.pi) % (2.0 * math.pi) - math.pi
+
+    def invert_formation_slots(self, target_heading: float) -> bool:
+        """Perform Hungarian minimal-displacement slot re-assignment on heading reversal (TKT-43).
+        Matches current follower positions to candidate slot positions in the new heading,
+        minimizing total transit distance and eliminating cross-flight prop clash hazards."""
+        current_leader = self.sim.leader
+        if current_leader is None or current_leader.crashed:
+            return False
+
+        living_followers = [
+            d for d in self.sim.drones
+            if not d.crashed and not d.is_leader and d.flight_state not in ("LANDED", "DESCENDING") and getattr(d, "enrolled", True)
+        ]
+        n = len(living_followers)
+        if n <= 1:
+            return False
+
+        # Compute candidate slot positions for new target heading
+        heading_vec = np.array([math.cos(target_heading), math.sin(target_heading), 0.0], dtype=float)
+        lateral_vec = np.array([-heading_vec[1], heading_vec[0], 0.0], dtype=float)
+
+        candidate_slots = []
+        for k in range(1, n + 1):
+            row = (k + 1) // 2
+            side = 1.0 if (k % 2 == 1) else -1.0
+            slot_pos = (
+                current_leader.pos
+                - (row * 6.0 * heading_vec)
+                + (side * row * 6.0 * lateral_vec)
+                + np.array([0.0, 0.0, row * 0.5], dtype=float)
+            )
+            candidate_slots.append(slot_pos)
+
+        # Construct cost matrix: squared Euclidean distance
+        cost_matrix = np.zeros((n, n), dtype=float)
+        for i, drone in enumerate(living_followers):
+            for j, s_pos in enumerate(candidate_slots):
+                diff = drone.pos - s_pos
+                cost_matrix[i, j] = float(np.dot(diff, diff))
+
+        # Solve optimal bipartite matching
+        row_ind, col_ind = hungarian_assignment(cost_matrix)
+
+        # Assign new deconflicted slots (k = col_idx + 1)
+        for r, c in zip(row_ind, col_ind):
+            drone = living_followers[r]
+            self.assigned_slots[drone.id] = c + 1
+
+        self.inversion_cooldown = 2.5
+        return True
 
     def _get_formation_slot(self, drone: Drone, leader: Drone) -> np.ndarray:
         living_followers = [
@@ -367,7 +445,8 @@ class LeaderFollowerBrain(BaseBrain):
         # Stage 1 Overhead Marshal: Equidistant holding ring around base anchor (0, 0, 25m)
         if getattr(self.sim, "overhead_marshal_active", False):
             radius = 20.0
-            angle = (2.0 * math.pi * (k - 1)) / max(1, len(living_followers))
+            k_marshal = living_followers.index(drone) + 1
+            angle = (2.0 * math.pi * (k_marshal - 1)) / max(1, len(living_followers))
             return np.array([radius * math.cos(angle), radius * math.sin(angle), 25.0], dtype=float)
 
         if self.formation_mode == "ECHELON_ESCORT":
