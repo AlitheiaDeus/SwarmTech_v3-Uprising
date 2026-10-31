@@ -267,6 +267,32 @@ class TestAutonomousSwarmRTBLanding(unittest.TestCase):
         self.assertEqual(sim.recovery_stage, "OVERHEAD_MARSHAL")
         self.assertTrue(np.allclose(sim.target_pos, [0.0, 0.0, 25.0]))
 
+    def test_coordinated_landing_holding_column_no_radial_scatter(self):
+        """Verify FIX-08: Drones in WAITING_CLEARANCE hold in 3D pad columns without scattering to map edges."""
+        sim = SwarmSimulator(drone_count=6)
+        # Position all drones over Base area
+        for i, d in enumerate(sim.drones):
+            d.pos = np.array([float(i * 1.5), -6.0, 22.0], dtype=float)
+            d.vel = np.zeros(3, dtype=float)
+
+        queued = sim.command_land_swarm()
+        self.assertEqual(len(queued), 6)
+        self.assertEqual(sim.recovery_stage, "LANDING")
+
+        # Step 180 ticks (3.0 seconds of simulation)
+        for _ in range(180):
+            sim.step(DT)
+
+        # For all drones still waiting or approaching, verify horizontal distance from pad is bounded
+        for d in sim.drones:
+            if d.flight_state == "DESCENDING" and d.landing_stage == "WAITING_CLEARANCE":
+                pad_pos = d.landing_pad if d.landing_pad is not None else sim.get_pad_position(d.landing_pad_idx or 0)
+                dist_to_pad_xy = float(np.linalg.norm(d.pos[:2] - pad_pos[:2]))
+                self.assertLess(
+                    dist_to_pad_xy, 6.0,
+                    f"Drone {d.id} drifted {dist_to_pad_xy:.1f}m away from pad while waiting clearance! Must hold column."
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

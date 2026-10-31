@@ -656,18 +656,25 @@ class SITLWorldEngine:
                 drone.rotor_rpm = 0.0
 
             elif drone.flight_state == "DESCENDING":
+                pad_pos = (
+                    drone.landing_pad
+                    if drone.landing_pad is not None
+                    else self.get_pad_position(drone.landing_pad_idx or 0)
+                )
+                drone.target_station = pad_pos
+
                 if drone.landing_wait_timer > 0.0:
                     drone.landing_stage = "WAITING_CLEARANCE"
-                    # Hold in overhead marshal pattern outside tether cylinder
-                    target_hold_z = 22.0 + (drone.landing_pad_idx or 0) * 0.5
+                    # Active horizontal column hold above assigned pad to prevent radial drift/scatter (FIX-08)
+                    to_pad_xy = pad_pos[:2] - drone.pos[:2]
+                    ax_hold = float(np.clip(2.5 * to_pad_xy[0] - 3.0 * drone.vel[0], -6.0, 6.0))
+                    ay_hold = float(np.clip(2.5 * to_pad_xy[1] - 3.0 * drone.vel[1], -6.0, 6.0))
+
+                    # Staggered vertical holding shelves (2.0m spacing per pad) outside tether cylinder
+                    target_hold_z = 22.0 + (drone.landing_pad_idx or 0) * 2.0
                     az_hold = float(np.clip(3.0 * (target_hold_z - drone.pos[2]) - 2.0 * drone.vel[2], -4.0, 4.0))
-                    guidance_accs[drone.id][2] = az_hold
+                    guidance_accs[drone.id] = np.array([ax_hold, ay_hold, az_hold], dtype=float)
                 else:
-                    pad_pos = (
-                        drone.landing_pad
-                        if drone.landing_pad is not None
-                        else self.get_pad_position(drone.landing_pad_idx or 0)
-                    )
                     to_pad_xy = pad_pos[:2] - drone.pos[:2]
                     dist_xy = float(np.linalg.norm(to_pad_xy))
 

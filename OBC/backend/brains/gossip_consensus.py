@@ -296,6 +296,7 @@ class GossipConsensusBrain(BaseBrain):
         for drone in active_drones:
             # 0. Lost-link failsafe: steer toward local LKP muster hold (TKT-41 & FIX-05)
             if getattr(drone, "lost_link", False):
+                drone.target_station = drone.lkp
                 accs[drone.id] = self._steer_toward(
                     drone.pos, drone.vel, drone.lkp, max_speed=V_LKP
                 )
@@ -304,12 +305,14 @@ class GossipConsensusBrain(BaseBrain):
             state = self._get_peer_state(drone.id)
             drone.acknowledged_target = np.copy(state.active_target)
             if self.formation_mode == "NATURAL_FLOCK":
+                drone.target_station = state.active_target
                 accs[drone.id] = self._compute_boid_acceleration(
                     drone, active_drones, state.active_target
                 )
             else:
                 k = sorted_ids.index(drone.id)
                 slot_pos = self._get_formation_slot(drone, k, living_count, state.active_target)
+                drone.target_station = slot_pos
 
                 # 1. Target Pursuit: Arrive steering toward decentralized geometric slot
                 target_acc = self._steer_toward(

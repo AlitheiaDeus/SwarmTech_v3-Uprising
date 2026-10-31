@@ -81,6 +81,7 @@ class Drone:
         self.acknowledged_target: np.ndarray = (
             np.array(pos, dtype=float) if pos is not None else np.array([60.0, 40.0, 30.0], dtype=float)
         )
+        self.target_station: Optional[np.ndarray] = None
 
         # Discrete Waypoint Mission Queue & Loiter Timers (TKT-28 & TKT-30)
         self.mission_waypoints: List[np.ndarray] = []
@@ -127,6 +128,7 @@ class Drone:
         self.landing_wait_timer = 0.0
         self.landing_stage = "NONE"
         self.acknowledged_target = np.array(pos, dtype=float)
+        self.target_station = None
         self.mission_waypoints = []
         self.current_wp_idx = 0
         self.mission_active = False

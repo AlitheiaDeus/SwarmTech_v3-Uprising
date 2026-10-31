@@ -212,6 +212,7 @@ class LeaderFollowerBrain(BaseBrain):
                             leader_speed = 3.0
 
                 target_dest = getattr(drone, "acknowledged_target", self.sim.target_pos)
+                drone.target_station = target_dest
                 accs[drone.id] = self._steer_toward(
                     drone.pos, drone.vel, target_dest, max_speed=leader_speed
                 )
@@ -219,6 +220,7 @@ class LeaderFollowerBrain(BaseBrain):
 
             # 2. Lost-link guidance: autonomous navigation toward LKP
             if drone.lost_link:
+                drone.target_station = drone.lkp
                 accs[drone.id] = self._steer_toward(
                     drone.pos, drone.vel, drone.lkp, max_speed=V_LKP
                 )
@@ -297,9 +299,12 @@ class LeaderFollowerBrain(BaseBrain):
             # 4. Normal active follower formation guidance
             if current_leader is not None:
                 if self.formation_mode == "NATURAL_FLOCK":
+                    heading = np.array([math.cos(self.formation_heading), math.sin(self.formation_heading), 0.0], dtype=float)
+                    drone.target_station = current_leader.pos - heading * 8.0
                     accs[drone.id] = self._compute_boid_acceleration(drone, current_leader)
                 else:
                     slot_pos = self._get_formation_slot(drone, current_leader)
+                    drone.target_station = slot_pos
                     accs[drone.id] = self._steer_toward(
                         drone.pos, drone.vel, slot_pos, max_speed=V_CRUISE
                     )

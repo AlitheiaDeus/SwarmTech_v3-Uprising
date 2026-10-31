@@ -461,7 +461,10 @@ class MavlinkBridge:
 
                     # 2d. NAV_CONTROLLER_OUTPUT (#62) for Mission Planner "Direct to current WP" line
                     if hasattr(self.mav, "nav_controller_output_encode"):
-                        drone_tgt = getattr(drone, "acknowledged_target", self.sim.target_pos)
+                        drone_tgt = getattr(drone, "target_station", None)
+                        if drone_tgt is None or getattr(drone, "is_leader", False):
+                            drone_tgt = getattr(drone, "acknowledged_target", self.sim.target_pos)
+
                         delta_xy = drone_tgt[:2] - drone.pos[:2]
                         dist_to_wp = float(np.linalg.norm(delta_xy))
                         if dist_to_wp > 0.1:
@@ -469,12 +472,15 @@ class MavlinkBridge:
                         else:
                             tb_deg = int(round(nav_heading_deg)) % 360
 
+                        # Clamp wp_dist to max tactical horizon (50m) to prevent unbounded line sprawl
+                        wp_dist_m = min(50, int(round(dist_to_wp)))
+
                         msg_nav = self.mav.nav_controller_output_encode(
                             nav_roll=float(drone.roll),
                             nav_pitch=float(drone.pitch),
                             nav_bearing=tb_deg,
                             target_bearing=tb_deg,
-                            wp_dist=int(round(dist_to_wp)),
+                            wp_dist=wp_dist_m,
                             alt_error=float(drone_tgt[2] - drone.pos[2]),
                             aspd_error=0.0,
                             xtrack_error=0.0,
@@ -482,9 +488,39 @@ class MavlinkBridge:
                         pkt_nav = msg_nav.pack(self.mav)
                         bytes_sent += self.mavlink_sock.sendto(pkt_nav, (self.host, self.mavlink_port))
 
-            # 1b. Periodic HOME_POSITION broadcast (at 1 Hz) so Mission Planner auto-centers on SIM base
+                    # 2e. GPS_RAW_INT (#24) for Mission Planner GPS Track (COG) & 3D fix status
+                    if hasattr(self.mav, "gps_raw_int_encode"):
+                        speed_xy = float(math.hypot(drone.vel[0], drone.vel[1]))
+                        if speed_xy > 0.1:
+                            cog_deg = (90.0 - math.degrees(math.atan2(drone.vel[1], drone.vel[0]))) % 360.0
+                            cog_cdeg = int(round(cog_deg * 100.0)) % 36000
+                        else:
+                            cog_cdeg = hdg_cdeg
+
+                        msg_gps = self.mav.gps_raw_int_encode(
+                            time_usec=int(current_time * 1e6),
+                            fix_type=3,  # 3D GPS Fix
+                            lat=int(lat_deg * 1e7),
+                            lon=int(lon_deg * 1e7),
+                            alt=int(alt_m * 1000.0),
+                            eph=100,
+                            epv=100,
+                            vel=int(round(speed_xy * 100.0)),
+                            cog=cog_cdeg,
+                            satellites_visible=16,
+                        )
+                        pkt_gps = msg_gps.pack(self.mav)
+                        bytes_sent += self.mavlink_sock.sendto(pkt_gps, (self.host, self.mavlink_port))
+
+            # 1b. Periodic HOME_POSITION broadcast (at 1 Hz) for all active airframes so Mission Planner
+            # auto-centers on SIM base and acknowledges home for each vehicle (sysid 1..N)
             if send_hb:
-                bytes_sent += self.send_home_position((self.host, self.mavlink_port))
+                for drone in self.sim.drones:
+                    if not drone.crashed:
+                        bytes_sent += self.send_home_position(
+                            (self.host, self.mavlink_port),
+                            sys_id=int(drone.id) + 1,
+                        )
 
         # 3. MISSION_ITEM_REACHED (#46) when active target reached
         target_reached = self.sim.is_target_reached()

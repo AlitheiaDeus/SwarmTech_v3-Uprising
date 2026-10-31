@@ -616,6 +616,85 @@ class TestMavlinkBridge(unittest.TestCase):
         self.assertAlmostEqual(self.bridge.home_lon, 139.7400, places=4)
         self.assertAlmostEqual(self.bridge.home_alt, 25.0, places=1)
 
+    def test_gps_raw_int_packet_emission_and_cog(self):
+        """Verify GPS_RAW_INT (#24) is emitted with fix_type 3, 16 satellites, and true velocity COG."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((self.host, self.mav_port))
+        listener.settimeout(1.0)
+
+        try:
+            # Velocity: 10 m/s North (Y)
+            d0 = self.sim.drones[0]
+            d0.vel = np.array([0.0, 10.0, 0.0], dtype=float)
+
+            self.bridge.last_mavlink_pos = -1.0
+            bytes_sent = self.bridge.emit_mavlink_loopback()
+            self.assertGreater(bytes_sent, 0)
+
+            mav = mavlink2.MAVLink(None)
+            gps_found = False
+
+            for _ in range(len(self.sim.drones) * 5):
+                try:
+                    data, _ = listener.recvfrom(2048)
+                    msg = mav.decode(bytearray(data))
+                    if msg.get_srcSystem() == 1 and msg.get_msgId() == getattr(mavlink2, "MAVLINK_MSG_ID_GPS_RAW_INT", 24):
+                        gps_found = True
+                        self.assertEqual(msg.fix_type, 3)
+                        self.assertEqual(msg.satellites_visible, 16)
+                        # North velocity COG must be 0 deg = 0 cdeg
+                        self.assertEqual(msg.cog, 0)
+                        self.assertEqual(msg.vel, 1000)  # 10 m/s in cm/s
+                except (socket.timeout, BlockingIOError):
+                    break
+
+            self.assertTrue(gps_found, "GPS_RAW_INT packet not received")
+        finally:
+            listener.close()
+
+    def test_escort_formation_slot_nav_output(self):
+        """Verify escort NAV_CONTROLLER_OUTPUT uses dynamic formation target station, not stale Point Alpha."""
+        if not HAVE_PYMAVLINK:
+            self.skipTest("pymavlink not installed")
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind((self.host, self.mav_port))
+        listener.settimeout(1.0)
+
+        try:
+            d1 = self.sim.drones[1]
+            d1.pos = np.array([10.0, 10.0, 20.0], dtype=float)
+            # Escort target station 20m East of its current pos
+            d1.target_station = np.array([30.0, 10.0, 20.0], dtype=float)
+
+            self.bridge.last_mavlink_pos = -1.0
+            bytes_sent = self.bridge.emit_mavlink_loopback()
+            self.assertGreater(bytes_sent, 0)
+
+            mav = mavlink2.MAVLink(None)
+            nav_found = False
+
+            for _ in range(len(self.sim.drones) * 5):
+                try:
+                    data, _ = listener.recvfrom(2048)
+                    msg = mav.decode(bytearray(data))
+                    if msg.get_srcSystem() == 2 and msg.get_msgId() == getattr(mavlink2, "MAVLINK_MSG_ID_NAV_CONTROLLER_OUTPUT", 62):
+                        nav_found = True
+                        # Bearing straight East (X) is 90 deg from North
+                        self.assertEqual(msg.target_bearing, 90)
+                        self.assertEqual(msg.wp_dist, 20)
+                except (socket.timeout, BlockingIOError):
+                    break
+
+            self.assertTrue(nav_found, "Escort NAV_CONTROLLER_OUTPUT packet not received")
+        finally:
+            listener.close()
+
 
 if __name__ == "__main__":
     unittest.main()
