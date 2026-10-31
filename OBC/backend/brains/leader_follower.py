@@ -83,6 +83,11 @@ class LeaderFollowerBrain(BaseBrain):
             if drone.crashed or drone.flight_state in ("LANDED", "DESCENDING"):
                 continue
 
+            # 0b. Tactical GNSS Denial & Dead-Reckoning RTB Override (TKT-52)
+            if getattr(drone, "gnss_denied", False):
+                accs[drone.id] = self.compute_gnss_denied_guidance(drone, dt)
+                continue
+
             # 1. Leader guidance: steer toward global mission target
             if drone.is_leader:
                 if drone.lost_link:

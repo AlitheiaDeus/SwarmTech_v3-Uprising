@@ -273,6 +273,26 @@ class SwarmWebServer:
                 "rf_jamming": jamming,
             }
 
+        elif cmd in ("TOGGLE_GNSS_DENIAL", "JAM_GNSS", "SET_GNSS_DENIAL"):
+            drone_id = cmd_dict.get("id", cmd_dict.get("drone_id", None))
+            denied = cmd_dict.get("denied", None)
+            state = self.sim.toggle_gnss_denial(
+                drone_id=int(drone_id) if drone_id is not None else None,
+                denied=bool(denied) if denied is not None else None,
+            )
+            target_str = f"Drone #{drone_id}" if drone_id is not None else "ENTIRE FLEET"
+            self.session_manager.add_event(
+                "EW",
+                f"Tactical GNSS Denial {target_str} -> {'ACTIVE (DEAD-RECKONING RTB)' if state else 'RESTORED'}",
+                sim_time=self.sim.sim_time,
+            )
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "gnss_denied": state,
+                "target": target_str,
+            }
+
         elif cmd == "SET_FORMATION":
             mode = cmd_dict.get("mode", "ECHELON_ESCORT")
             self.sim.set_formation(mode)

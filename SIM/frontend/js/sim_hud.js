@@ -57,6 +57,12 @@
             });
         }
 
+        // Tactical GNSS Denial & Dead-Reckoning RTB Trigger (TKT-52)
+        setupBtn('btn-toggle-gnss', () => {
+            logEvent('EW', 'Toggling Tactical GNSS Denial across Swarm: TOGGLE_GNSS_DENIAL');
+            window.swarmClient?.send({ cmd: 'TOGGLE_GNSS_DENIAL' });
+        });
+
         // 2. Physical Fault Injection Deck
         setupBtn('btn-kill-leader', () => {
             logEvent('CASUALTY', 'Injected flagship motor failure: KILL_LEADER');
@@ -303,6 +309,12 @@
                 card.elTag.className = 'status-tag tag-crashed';
                 card.btnKill.style.display = 'none';
                 card.btnRevive.style.display = 'inline-block';
+            } else if (d.gnss_denied) {
+                card.el.className = 'drone-truth-card gnss-denied';
+                card.elTag.textContent = d.gnss_settled ? 'BLIND SETTLE' : 'DEAD-RECKONING RTB';
+                card.elTag.className = 'status-tag tag-gnss-denied';
+                card.btnKill.style.display = 'inline-block';
+                card.btnRevive.style.display = 'none';
             } else if (d.is_leader) {
                 card.el.className = 'drone-truth-card';
                 card.elTag.textContent = 'FLAGSHIP';

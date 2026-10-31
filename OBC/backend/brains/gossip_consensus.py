@@ -131,7 +131,7 @@ class GossipConsensusBrain(BaseBrain):
 
         active_drones = [
             d for d in self.sim.drones
-            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING") and getattr(d, "enrolled", True)
+            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING") and getattr(d, "enrolled", True) and not getattr(d, "gnss_denied", False)
         ]
         living_count = len(active_drones)
         if living_count == 0:
@@ -220,10 +220,18 @@ class GossipConsensusBrain(BaseBrain):
         2. Local Flocking Cohesion & Alignment with nearby peers."""
         accs = {d.id: np.zeros(3, dtype=float) for d in self.sim.drones}
 
+        # Guidance for GNSS-denied airframes (TKT-52)
+        gnss_denied_drones = [
+            d for d in self.sim.drones
+            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING") and getattr(d, "gnss_denied", False)
+        ]
+        for d in gnss_denied_drones:
+            accs[d.id] = self.compute_gnss_denied_guidance(d, dt)
+
         # Guidance for unenrolled solo scouts (TKT-50)
         unenrolled_drones = [
             d for d in self.sim.drones
-            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING") and not getattr(d, "enrolled", True)
+            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING") and not getattr(d, "enrolled", True) and not getattr(d, "gnss_denied", False)
         ]
         for scout in unenrolled_drones:
             if getattr(scout, "lost_link", False):
@@ -244,7 +252,7 @@ class GossipConsensusBrain(BaseBrain):
 
         active_drones = [
             d for d in self.sim.drones
-            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING") and getattr(d, "enrolled", True)
+            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING") and getattr(d, "enrolled", True) and not getattr(d, "gnss_denied", False)
         ]
         living_count = len(active_drones)
         if living_count == 0:

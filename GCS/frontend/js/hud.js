@@ -80,6 +80,12 @@
             });
         }
 
+        // Tactical GNSS Denial & Dead-Reckoning RTB Trigger (TKT-52)
+        setupBtn('btn-jam-gnss', () => {
+            logEvent('EW', 'Toggling Tactical GNSS Denial across Swarm: TOGGLE_GNSS_DENIAL');
+            window.swarmClient?.send({ cmd: 'TOGGLE_GNSS_DENIAL' });
+        });
+
         // Brain Selectors (Legacy / Hot-swap)
         setupBtn('btn-brain-lf', () => dispatchBrain('LEADER_FOLLOWER'));
         setupBtn('btn-brain-gossip', () => dispatchBrain('GOSSIP_CONSENSUS'));
@@ -765,7 +771,7 @@
         }
 
         // Status Styling & Badges
-        card.el.classList.remove('leader-card', 'crashed-card', 'lkp-card', 'gossip-card', 'takeoff-card', 'enroute-card', 'jettison-card', 'landed-card', 'landing-card', 'hold-card');
+        card.el.classList.remove('leader-card', 'crashed-card', 'lkp-card', 'gossip-card', 'takeoff-card', 'enroute-card', 'jettison-card', 'landed-card', 'landing-card', 'hold-card', 'card-gnss-denied');
         card.elRole.className = 'drone-role-badge';
 
         function setActionBtn(text, className, title) {
@@ -811,6 +817,19 @@
                 card.elLandBtn.textContent = 'LANDING';
                 card.elLandBtn.className = 'card-btn-action btn-landing-busy';
             }
+            setActionBtn('KILL', 'card-btn-action btn-kill');
+        } else if (drone.gnss_denied) {
+            card.el.classList.add('card-gnss-denied');
+            if (drone.gnss_settled) {
+                card.elStatus.textContent = 'BLIND SETTLING';
+                card.elStatus.className = 'status-tag tag-gnss-denied';
+                card.elRole.textContent = 'SOFT DESCENT';
+            } else {
+                card.elStatus.textContent = 'DEAD-RECKONING RTB';
+                card.elStatus.className = 'status-tag tag-gnss-denied';
+                card.elRole.textContent = `GNSS DENIED [±${Number(drone.drift_radius || 0).toFixed(1)}m]`;
+            }
+            if (card.elLandBtn) card.elLandBtn.style.display = 'none';
             setActionBtn('KILL', 'card-btn-action btn-kill');
         } else if (drone.status === 'BREAKAWAY_JETTISON') {
             card.el.classList.add('jettison-card');

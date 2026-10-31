@@ -698,6 +698,35 @@ body:has(#right-panel.collapsed) #tab-restore-right,
   font-weight: 700;
 }
 
+.tag-gnss-denied {
+  color: #FFAA00 !important;
+  background: rgba(255, 170, 0, 0.25) !important;
+  border: 1px solid #FFAA00 !important;
+  font-weight: 700;
+  animation: pulse-amber-tag 1.0s infinite alternate;
+}
+
+.card-gnss-denied {
+  border-color: #FFAA00 !important;
+  box-shadow: 0 0 14px rgba(255, 170, 0, 0.5) !important;
+  animation: pulse-amber-card 1.2s infinite alternate;
+}
+
+.card-gnss-denied .drone-dot {
+  background: #FFAA00 !important;
+  box-shadow: 0 0 10px #FFAA00 !important;
+}
+
+@keyframes pulse-amber-tag {
+  0% { opacity: 0.7; transform: scale(0.98); }
+  100% { opacity: 1.0; transform: scale(1.0); }
+}
+
+@keyframes pulse-amber-card {
+  0% { box-shadow: 0 0 6px rgba(255, 170, 0, 0.3); }
+  100% { box-shadow: 0 0 16px rgba(255, 170, 0, 0.65); }
+}
+
 .badge-2ic {
   color: var(--neon-cyan) !important;
   background: rgba(0, 240, 255, 0.2) !important;

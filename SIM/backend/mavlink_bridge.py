@@ -517,17 +517,19 @@ class MavlinkBridge:
                         else:
                             cog_cdeg = hdg_cdeg
 
+                        # MAVLink Glitch Injection on Tactical GNSS Denial (TKT-52)
+                        is_denied = getattr(drone, "gnss_denied", False)
                         msg_gps = self.mav.gps_raw_int_encode(
                             time_usec=int(current_time * 1e6),
-                            fix_type=3,  # 3D GPS Fix
-                            lat=int(lat_deg * 1e7),
-                            lon=int(lon_deg * 1e7),
+                            fix_type=0 if is_denied else 3,  # 0 = No GPS Fix
+                            lat=0 if is_denied else int(lat_deg * 1e7),
+                            lon=0 if is_denied else int(lon_deg * 1e7),
                             alt=int(alt_m * 1000.0),
-                            eph=100,
-                            epv=100,
+                            eph=9999 if is_denied else 100,
+                            epv=9999 if is_denied else 100,
                             vel=int(round(speed_xy * 100.0)),
                             cog=cog_cdeg,
-                            satellites_visible=16,
+                            satellites_visible=0 if is_denied else 16,
                         )
                         pkt_gps = msg_gps.pack(self.mav)
                         bytes_sent += self.mavlink_sock.sendto(pkt_gps, (self.host, self.mavlink_port))

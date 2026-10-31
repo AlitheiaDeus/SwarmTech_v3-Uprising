@@ -504,6 +504,24 @@ body {
   border-color: var(--neon-amber);
 }
 
+.tag-gnss-denied {
+  background: rgba(255, 184, 0, 0.25);
+  color: var(--neon-amber);
+  border-color: var(--neon-amber);
+  font-weight: 700;
+  animation: pulse-amber-tag 1s infinite alternate;
+}
+
+.drone-truth-card.gnss-denied {
+  border-color: var(--neon-amber) !important;
+  box-shadow: 0 0 12px rgba(255, 184, 0, 0.4) !important;
+}
+
+@keyframes pulse-amber-tag {
+  0% { opacity: 0.7; }
+  100% { opacity: 1.0; }
+}
+
 .coord-grid {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;

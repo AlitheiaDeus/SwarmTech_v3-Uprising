@@ -3,21 +3,14 @@
 # Prevents accidental commits of private specs, machine paths, and runtime artifacts
 # ==============================================================================
 
-# Private Specs & Landmarks (as requested)
+# Private Specs & Landmarks (Developer & Agent Eyes Only)
+internal/
 AGENTS.md
 AGENTS.MD
 agents.md
 GEMINI.md
-SWARM_UPRISING_SPEC.md
-SWARM_OVERHAUL_HANDOFF_SPEC.md
-SESSION_HANDOFF.md
-REFORMATION_PLAN.md
-something.md
-SOMETHING.md
 kanban_archive.md
 KANBAN_ARCHIVE.md
-kanban_scope.md
-KANBAN_SCOPE.md
 
 # Machine-Specific Scripts & Local Environments
 run.ps1

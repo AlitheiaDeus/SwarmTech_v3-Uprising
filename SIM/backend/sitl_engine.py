@@ -174,6 +174,9 @@ class SITLWorldEngine:
         self.turnaround_timer: float = 0.0        # Turnaround countdown timer (12.0s)
         self.auto_turnaround_enabled: bool = True # Automatically release next wave on turnaround timeout
 
+        # Tactical GNSS Denial & Dead-Reckoning RTB (TKT-52)
+        self.gnss_denied_all: bool = False
+
         # Build Drone Fleet
         self.drones: List[Drone] = []
         self._highest_drone_id: int = drone_count - 1
@@ -325,6 +328,7 @@ class SITLWorldEngine:
         self.turnaround_timer = 0.0
         self.scramble_active = False
         self.scramble_timer = 0.0
+        self.gnss_denied_all = False
         self._highest_drone_id = count - 1
 
         # Fleet Hardware Identity Registry (TKT-48)
@@ -1012,6 +1016,15 @@ class SITLWorldEngine:
                 if drone.vel[2] < 0.0:
                     drone.vel[2] = 0.0
 
+            # Emergency Blind Settle Touchdown (TKT-52)
+            if getattr(drone, "gnss_settled", False) and drone.pos[2] <= 0.52:
+                drone.pos[2] = 0.5
+                drone.vel = np.zeros(3, dtype=float)
+                drone.acc = np.zeros(3, dtype=float)
+                drone.flight_state = "LANDED"
+                drone.status = "LANDED"
+                drone.rotor_rpm = 0.0
+
             # Orientation update
             speed_xy = math.hypot(drone.vel[0], drone.vel[1])
             if speed_xy > 0.2:
@@ -1132,7 +1145,6 @@ class SITLWorldEngine:
                 if self.sim_time - d.last_heartbeat_time > LINK_TIMEOUT:
                     d.lost_link = True
                     d.status = "LOST_LINK"
-            return
 
         elif self.comms_mode == "TETHERED_RELAY":
             # Primary leader on hardline umbilical
@@ -1209,7 +1221,6 @@ class SITLWorldEngine:
                     if self.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
                         drone.lost_link = True
                         drone.status = "LOST_LINK"
-            return
 
         elif self.comms_mode == "LEADER_FOLLOWER":
             # Wireless Star
@@ -1265,7 +1276,14 @@ class SITLWorldEngine:
                     if self.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
                         drone.lost_link = True
                         drone.status = "LOST_LINK"
-            return
+
+        # Update Howl RF Beacon tracking for GNSS-denied airframes across all modes (TKT-52)
+        for d in living:
+            if getattr(d, "gnss_denied", False):
+                d_gcs = float(np.linalg.norm(d.pos - self.tether_anchor))
+                howl_rssi = float(np.clip(-20.0 - 20.0 * math.log10(max(1.0, d_gcs)), -100.0, -20.0))
+                d.rssi = round(howl_rssi, 1)
+                d.link_quality = max(0.0, min(1.0, (d.rssi - (-100.0)) / 60.0))
 
     # ==========================================================================
     # 1b. Dynamic In-Flight Swarm Enrollment & P2P Handshakes (TKT-50)
@@ -1359,7 +1377,7 @@ class SITLWorldEngine:
 
         # Check collision with cable by any follower
         for drone in self.drones:
-            if drone.crashed or drone.is_leader or drone.flight_state in ("LANDED", "GROUND_IDLE"):
+            if drone.crashed or drone.is_leader or drone.flight_state in ("LANDED", "GROUND_IDLE") or getattr(drone, "gnss_settled", False):
                 continue
 
             d_perp, _ = self._dist_to_segment(
@@ -1405,7 +1423,7 @@ class SITLWorldEngine:
             return accs
 
         for drone in self.drones:
-            if drone.crashed or drone.is_leader or drone.flight_state in ("LANDED", "GROUND_IDLE"):
+            if drone.crashed or drone.is_leader or drone.flight_state in ("LANDED", "GROUND_IDLE") or getattr(drone, "gnss_settled", False):
                 continue
 
             d_perp, r_perp = self._dist_to_segment(
@@ -1627,6 +1645,13 @@ class SITLWorldEngine:
 
                     accs[drone_i.id] += a_push_i + a_damp_i
                     accs[drone_j.id] += a_push_j + a_damp_j
+
+                    # P2P Yip RSSI Emergency Cushion (TKT-52):
+                    # Inter-drone close-range proximity cushion (hat_d < 2.0m <=> RSSI > -38 dBm)
+                    if dist <= 2.0:
+                        cushion_mag = 10.0 * (2.0 - dist)
+                        accs[drone_i.id] += cushion_mag * n_ij
+                        accs[drone_j.id] -= cushion_mag * n_ij
 
                 # Check Zone 2: Caution Buffer (3.5m < d <= 8.0m)
                 elif dist <= ZONE2_OUTER:
@@ -2214,6 +2239,52 @@ class SITLWorldEngine:
         self.recovery_stage = "IDLE"
         self.landing_pads.clear()
         self.brain.reset()
+
+    def toggle_gnss_denial(
+        self, drone_id: Optional[int] = None, denied: Optional[bool] = None
+    ) -> bool:
+        """Toggle or explicitly set GNSS/GPS denial for a specific drone or the entire fleet (TKT-52).
+        Returns new denial state (True if denied, False if nominal)."""
+        if drone_id is not None:
+            drone = self.get_drone_by_id(drone_id)
+            if drone is None:
+                return False
+            new_state = (not drone.gnss_denied) if denied is None else bool(denied)
+            self._set_drone_gnss_denial(drone, new_state)
+            return new_state
+        else:
+            new_state = (not self.gnss_denied_all) if denied is None else bool(denied)
+            self.gnss_denied_all = new_state
+            for drone in self.drones:
+                if not drone.crashed:
+                    self._set_drone_gnss_denial(drone, new_state)
+            return new_state
+
+    def _set_drone_gnss_denial(self, drone: Drone, state: bool) -> None:
+        """Apply or lift tactical GNSS denial on an individual airframe."""
+        drone.gnss_denied = state
+        if state:
+            drone.gnss_denied_timer = 0.0
+            # Lock entry track reciprocal heading: psi_reciprocal = (yaw + 180 deg) % 360 deg
+            drone.reciprocal_heading = float((drone.yaw + math.pi) % (2.0 * math.pi))
+            drone.rssi_prev = float(drone.rssi)
+            drone.drift_radius = 0.5
+            drone.gnss_settled = False
+            drone.mission_active = False
+            drone.status = "GNSS_DENIED"
+            # Broadcast MAVLink STATUSTEXT
+            if hasattr(self, "mavlink") and self.mavlink is not None:
+                self.mavlink.send_mavlink_statustext(
+                    "GNSS DENIED: DEAD-RECKONING RTB",
+                    severity=2,  # MAV_SEVERITY_CRITICAL
+                    src_sys=drone.id + 1,
+                )
+        else:
+            drone.gnss_denied_timer = 0.0
+            drone.drift_radius = 0.0
+            drone.gnss_settled = False
+            if drone.status == "GNSS_DENIED":
+                drone.status = "FLEET_LEADER" if drone.is_leader else "ACTIVE"
 
     def cut_tether(self) -> None:
         """Operator manual tether severance directive."""

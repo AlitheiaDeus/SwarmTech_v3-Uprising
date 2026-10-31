@@ -111,6 +111,14 @@ class Drone:
         self.enrollment_timer: float = 0.0
         self.rejoin_target: Optional[np.ndarray] = None
 
+        # Tactical GNSS Denial & Dead-Reckoning RTB (TKT-52)
+        self.gnss_denied: bool = False
+        self.gnss_denied_timer: float = 0.0
+        self.reciprocal_heading: float = 0.0  # Locked entry track reciprocal heading (radians)
+        self.drift_radius: float = 0.0       # Time-scaled drift error circle (meters)
+        self.rssi_prev: float = -100.0       # Previous scalar Howl RSSI for gradient ascent (dBm)
+        self.gnss_settled: bool = False      # Emergency blind soft-settle flag
+
     def reset_state(
         self,
         pos: np.ndarray,
@@ -171,6 +179,12 @@ class Drone:
         self.enrollment_status = "ENROLLED"
         self.enrollment_timer = 0.0
         self.rejoin_target = None
+        self.gnss_denied = False
+        self.gnss_denied_timer = 0.0
+        self.reciprocal_heading = 0.0
+        self.drift_radius = 0.0
+        self.rssi_prev = -100.0
+        self.gnss_settled = False
 
     @property
     def target_reached(self) -> bool:
@@ -232,4 +246,9 @@ class Drone:
             "rejoin_target": [round(float(v), 2) for v in self.rejoin_target] if self.rejoin_target is not None else None,
             "briefing": self.briefing,
             "scramble_time": round(float(self.scramble_time), 2),
+            "gnss_denied": self.gnss_denied,
+            "gnss_denied_timer": round(float(self.gnss_denied_timer), 2),
+            "reciprocal_heading": round(float(self.reciprocal_heading), 3),
+            "drift_radius": round(float(self.drift_radius), 2),
+            "gnss_settled": self.gnss_settled,
         }
