@@ -187,6 +187,21 @@
             }
         });
 
+        setupBtn('btn-scramble-swarm', () => {
+            logEvent('CMD', 'Ordering sequenced pad scramble: SCRAMBLE_SWARM');
+            window.swarmClient?.send({ cmd: 'SCRAMBLE_SWARM', stagger: 1.2 });
+        });
+
+        setupBtn('btn-cold-reset', () => {
+            logEvent('CMD', 'Resetting fleet to cold ground pads: COLD_RESET');
+            window.swarmClient?.send({ cmd: 'COLD_RESET' });
+        });
+
+        setupBtn('btn-spawn-pad', () => {
+            logEvent('CMD', 'Staging standby reinforcement drone on pad: SPAWN_REINFORCEMENT');
+            window.swarmClient?.send({ cmd: 'SPAWN_REINFORCEMENT' });
+        });
+
         setupBtn('btn-reinforce-swarm', () => {
             logEvent('CMD', 'Launching reinforcement drone from base pad: LAUNCH_REINFORCEMENT');
             window.swarmClient?.send({ cmd: 'LAUNCH_REINFORCEMENT' });
@@ -624,11 +639,16 @@
                     descendingDroneIds.delete(d.id);
                 }
 
-                if (d.flight_state === 'LANDED' && !landedDroneIds.has(d.id)) {
+                const isGrounded = (d.flight_state === 'LANDED' || d.flight_state === 'GROUND_IDLE');
+                if (isGrounded && !landedDroneIds.has(d.id)) {
                     landedDroneIds.add(d.id);
                     const padStr = d.landing_pad_idx !== undefined && d.landing_pad_idx !== null ? `Pad #${d.landing_pad_idx}` : 'pad';
-                    logEvent('TOUCHDOWN', `${dName} touched down on ${padStr}. Motors disarmed (0 RPM).`);
-                } else if (d.flight_state !== 'LANDED' && landedDroneIds.has(d.id)) {
+                    if (d.flight_state === 'GROUND_IDLE') {
+                        logEvent('STATUS', `${dName} staged on ${padStr} in GROUND IDLE.`);
+                    } else {
+                        logEvent('TOUCHDOWN', `${dName} touched down on ${padStr}. Motors disarmed (0 RPM).`);
+                    }
+                } else if (!isGrounded && landedDroneIds.has(d.id)) {
                     landedDroneIds.delete(d.id);
                     logEvent('TAKEOFF', `${dName} launching from pad. Rejoining swarm.`);
                 }
@@ -679,6 +699,14 @@
         }
         if (card.elUidSub) {
             card.elUidSub.textContent = `UID: ${drone.hardware_uid || 'UNKNOWN'}`;
+        }
+        if (card.elBriefingSub) {
+            if (drone.briefing && (drone.flight_state === 'GROUND_IDLE' || drone.flight_state === 'TAKEOFF' || drone.enrollment_status === 'SCOUT')) {
+                card.elBriefingSub.style.display = 'block';
+                card.elBriefingSub.textContent = drone.briefing;
+            } else {
+                card.elBriefingSub.style.display = 'none';
+            }
         }
 
         const speed = Math.hypot(drone.vel[0], drone.vel[1], drone.vel[2]).toFixed(1);
@@ -732,12 +760,18 @@
             card.elRole.textContent = 'DESTROYED';
             setActionBtn('REBOOT', 'card-btn-action btn-reboot', '[SITL Sim Lab] Revive crashed airframe');
             if (card.elLandBtn) card.elLandBtn.style.display = 'none';
-        } else if (drone.flight_state === 'LANDED') {
+        } else if (drone.flight_state === 'LANDED' || drone.flight_state === 'GROUND_IDLE') {
             card.el.classList.add('landed-card');
             const padStr = drone.landing_pad_idx !== undefined && drone.landing_pad_idx !== null ? `P${drone.landing_pad_idx}` : '';
-            card.elStatus.textContent = padStr ? `LANDED [${padStr}]` : 'LANDED';
-            card.elStatus.className = 'status-tag tag-landed';
-            card.elRole.textContent = 'DISARMED';
+            if (drone.flight_state === 'GROUND_IDLE') {
+                card.elStatus.textContent = padStr ? `GROUND [${padStr}]` : 'GROUND IDLE';
+                card.elStatus.className = 'status-tag tag-landed';
+                card.elRole.textContent = 'STANDBY';
+            } else {
+                card.elStatus.textContent = padStr ? `LANDED [${padStr}]` : 'LANDED';
+                card.elStatus.className = 'status-tag tag-landed';
+                card.elRole.textContent = 'DISARMED';
+            }
             if (card.elLandBtn) {
                 card.elLandBtn.style.display = 'inline-block';
                 card.elLandBtn.textContent = 'LAUNCH';
@@ -872,6 +906,7 @@
                 <span class="status-tag tag-active">ACTIVE</span>
             </div>
             <div class="card-uid-sub">UID: ${hwUid}</div>
+            <div class="card-briefing-sub" style="display: none;"></div>
             <div class="card-metrics">
                 <div class="metric-col">
                     <span class="metric-label">ALT</span>
@@ -942,6 +977,7 @@
             elIdLabel: el.querySelector('.drone-id-label'),
             elSysidBadge: el.querySelector('.drone-sysid-badge'),
             elUidSub: el.querySelector('.card-uid-sub'),
+            elBriefingSub: el.querySelector('.card-briefing-sub'),
             elAlt: el.querySelector('.metric-alt'),
             elVel: el.querySelector('.metric-vel'),
             elBat: el.querySelector('.metric-bat'),

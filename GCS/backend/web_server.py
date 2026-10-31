@@ -306,7 +306,18 @@ class SwarmWebServer:
             self.session_manager.add_event("STATUS", f"Drone #{drone_id} rebooted and active", sim_time=self.sim.sim_time)
             return {"status": "OK", "cmd": cmd, "rebooted_id": drone_id}
 
-        elif cmd in ("LAUNCH_REINFORCEMENT", "REINFORCE_SWARM", "SPAWN_REINFORCEMENT"):
+        elif cmd in ("SPAWN_REINFORCEMENT", "SPAWN_DRONE", "STAGE_REINFORCEMENT"):
+            new_drone = self.sim.spawn_reinforcement(auto_launch=False)
+            self.session_manager.add_event("SPAWN", f"Standby Drone #{new_drone.id} staged on pad ({new_drone.briefing})", sim_time=self.sim.sim_time)
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "drone_id": new_drone.id,
+                "briefing": new_drone.briefing,
+                "total_drones": len(self.sim.drones),
+            }
+
+        elif cmd in ("LAUNCH_REINFORCEMENT", "REINFORCE_SWARM"):
             new_drone = self.sim.launch_reinforcement()
             self.session_manager.add_event("LAUNCH", f"Reinforcement Drone #{new_drone.id} launched from base pad", sim_time=self.sim.sim_time)
             return {
@@ -315,6 +326,18 @@ class SwarmWebServer:
                 "drone_id": new_drone.id,
                 "total_drones": len(self.sim.drones),
             }
+
+        elif cmd in ("SCRAMBLE_SWARM", "SCRAMBLE", "PAD_SCRAMBLE"):
+            stagger = float(cmd_dict.get("stagger", 1.2))
+            res = self.sim.command_scramble_swarm(stagger_s=stagger)
+            self.session_manager.add_event("SCRAMBLE", f"Cold scramble ordered (stagger: {stagger}s)", sim_time=self.sim.sim_time)
+            return res
+
+        elif cmd in ("COLD_RESET", "COLD_GROUND", "COLD_START"):
+            count = cmd_dict.get("count", None)
+            res = self.sim.command_cold_start_swarm(count=int(count) if count is not None else None)
+            self.session_manager.add_event("CMD", "Fleet reset to cold ground launch pads", sim_time=self.sim.sim_time)
+            return res
 
         elif cmd in ("REBOOT_ALL_DEAD", "RESPAWN_ALL_DEAD", "REBOOT_DEAD"):
             revived = self.sim.reboot_all_dead()

@@ -51,10 +51,12 @@ class Drone:
         self.pitch: float = 0.0        # Radians
         self.roll: float = 0.0         # Radians
         self.rotor_rpm: float = 5200.0 # Visual rotor speed
+        self.scramble_time: float = 0.0 # Scheduled scramble launch timestamp (TKT-41)
+        self.briefing: str = ""         # Mission pre-briefing / rendezvous text (TKT-41)
 
         # Comms & Fault Tolerance
         self.crashed: bool = False
-        self.flight_state: str = "CRUISE"  # "TAKEOFF", "EN_ROUTE", "CRUISE", "CRASHED"
+        self.flight_state: str = "CRUISE"  # "TAKEOFF", "EN_ROUTE", "CRUISE", "CRASHED", "LANDED", "GROUND_IDLE"
         self.lost_link: bool = False
         self.lkp: np.ndarray = np.copy(self.pos)
         self.last_heartbeat_time: float = 0.0
@@ -222,4 +224,6 @@ class Drone:
             "enrollment_status": self.enrollment_status,
             "enrollment_timer": round(float(self.enrollment_timer), 2),
             "rejoin_target": [round(float(v), 2) for v in self.rejoin_target] if self.rejoin_target is not None else None,
+            "briefing": self.briefing,
+            "scramble_time": round(float(self.scramble_time), 2),
         }

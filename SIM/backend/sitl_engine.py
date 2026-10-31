@@ -123,7 +123,11 @@ class SITLWorldEngine:
         home_lat: Optional[float] = None,
         home_lon: Optional[float] = None,
         home_alt: Optional[float] = None,
+        cold_start: bool = False,
+        count: Optional[int] = None,
     ):
+        if count is not None:
+            drone_count = count
         if seed is not None:
             np.random.seed(seed)
 
@@ -132,6 +136,12 @@ class SITLWorldEngine:
         self.enable_packet_loss: bool = enable_packet_loss
         self.comms_mode: str = "TETHERED_RELAY"  # "TETHERED_RELAY", "LEADER_FOLLOWER", "GOSSIP_CONSENSUS"
         self.rf_jamming_rate: float = 0.0        # Electronic warfare RF jamming rate [0.0, 0.5]
+
+        # Cold-Start Pad Scramble & Sequenced Climb-Out Corridor (TKT-41)
+        self.cold_start: bool = cold_start
+        self.scramble_active: bool = False
+        self.scramble_timer: float = 0.0
+        self.scramble_stagger: float = 1.2
 
         # Reference Geographic Home Anchor (Bubble 3: World Ground Truth)
         # Default: Tokyo Bay / Shinagawa Canal Waterfront (Tennozu Isle)
@@ -269,8 +279,10 @@ class SITLWorldEngine:
         lq = max(0.0, min(1.0, (rssi - (-100.0)) / 60.0)) * (1.0 - self.rf_jamming_rate)
         return round(rssi, 1), round(float(lq), 2)
 
-    def _init_fleet(self, count: int) -> None:
-        """Initialize leader and followers in safe starting formation."""
+    def _init_fleet(self, count: int, cold_start: Optional[bool] = None) -> None:
+        """Initialize leader and followers in safe starting formation or cold pads."""
+        if cold_start is None:
+            cold_start = getattr(self, "cold_start", False)
         self.drones.clear()
         self.tether_severed = False
         self.lost_link_loiter_timer = 0.0
@@ -278,40 +290,86 @@ class SITLWorldEngine:
         self.overhead_marshal_active = False
         self.recovery_stage = "IDLE"
         self.landing_pads.clear()
+        self.scramble_active = False
+        self.scramble_timer = 0.0
         self._highest_drone_id = count - 1
 
         # Fleet Hardware Identity Registry (TKT-48)
         self.fleet_registry = FleetRegistry(initial_count=count)
 
-        # Leader #0 positioned at (0, 0, 20)
-        rec0 = self.fleet_registry.get_by_drone_id(0)
-        leader = Drone(
-            drone_id=0,
-            tier=TIER_LEADER,
-            pos=np.array([0.0, 0.0, 20.0], dtype=float),
-            is_leader=True,
-            hardware_uid=rec0.hardware_uid if rec0 else "3842A10F9B200001",
-            tail_number=rec0.tail_number if rec0 else "ALITHEIA-V01",
-        )
-        self.drones.append(leader)
-
-        # Followers initialized in staggered grid behind leader
-        for i in range(1, count):
-            row = (i + 1) // 2
-            side = 1.0 if (i % 2 == 1) else -1.0
-            x = -row * 6.0
-            y = side * row * 6.0
-            z = 20.0 + (row * 0.5)
-            rec_i = self.fleet_registry.get_by_drone_id(i)
-            drone = Drone(
-                drone_id=i,
-                tier=TIER_ESCORT,
-                pos=np.array([x, y, z], dtype=float),
-                is_leader=False,
-                hardware_uid=rec_i.hardware_uid if rec_i else f"3842A10F9B20{i + 1:04X}",
-                tail_number=rec_i.tail_number if rec_i else f"ALITHEIA-V{i + 1:02d}",
+        if cold_start:
+            # Cold-start on numbered ground launch pads (TKT-41)
+            # Leader #0 positioned on Pad 0 (Z = 0.05m)
+            rec0 = self.fleet_registry.get_by_drone_id(0)
+            pad0_pos = self.get_pad_position(0)
+            pad0_pos[2] = 0.05
+            leader = Drone(
+                drone_id=0,
+                tier=TIER_LEADER,
+                pos=pad0_pos,
+                is_leader=True,
+                hardware_uid=rec0.hardware_uid if rec0 else "3842A10F9B200001",
+                tail_number=rec0.tail_number if rec0 else "ALITHEIA-V01",
             )
-            self.drones.append(drone)
+            leader.flight_state = "GROUND_IDLE"
+            leader.status = "GROUND_IDLE"
+            leader.rotor_rpm = 0.0
+            leader.landing_pad_idx = 0
+            leader.landing_pad = np.copy(pad0_pos)
+            self.landing_pads[0] = leader.id
+            self.drones.append(leader)
+
+            # Followers initialized cold on remaining pads
+            for i in range(1, count):
+                pad_idx = i % 8
+                pad_pos = self.get_pad_position(pad_idx)
+                pad_pos[2] = 0.05
+                rec_i = self.fleet_registry.get_by_drone_id(i)
+                drone = Drone(
+                    drone_id=i,
+                    tier=TIER_ESCORT,
+                    pos=pad_pos,
+                    is_leader=False,
+                    hardware_uid=rec_i.hardware_uid if rec_i else f"3842A10F9B20{i + 1:04X}",
+                    tail_number=rec_i.tail_number if rec_i else f"ALITHEIA-V{i + 1:02d}",
+                )
+                drone.flight_state = "GROUND_IDLE"
+                drone.status = "GROUND_IDLE"
+                drone.rotor_rpm = 0.0
+                drone.landing_pad_idx = pad_idx
+                drone.landing_pad = np.copy(pad_pos)
+                self.landing_pads[pad_idx] = drone.id
+                self.drones.append(drone)
+        else:
+            # Airborne initialization in staggered grid behind leader (default cruise)
+            rec0 = self.fleet_registry.get_by_drone_id(0)
+            leader = Drone(
+                drone_id=0,
+                tier=TIER_LEADER,
+                pos=np.array([0.0, 0.0, 20.0], dtype=float),
+                is_leader=True,
+                hardware_uid=rec0.hardware_uid if rec0 else "3842A10F9B200001",
+                tail_number=rec0.tail_number if rec0 else "ALITHEIA-V01",
+            )
+            self.drones.append(leader)
+
+            # Followers initialized in staggered grid behind leader
+            for i in range(1, count):
+                row = (i + 1) // 2
+                side = 1.0 if (i % 2 == 1) else -1.0
+                x = -row * 6.0
+                y = side * row * 6.0
+                z = 20.0 + (row * 0.5)
+                rec_i = self.fleet_registry.get_by_drone_id(i)
+                drone = Drone(
+                    drone_id=i,
+                    tier=TIER_ESCORT,
+                    pos=np.array([x, y, z], dtype=float),
+                    is_leader=False,
+                    hardware_uid=rec_i.hardware_uid if rec_i else f"3842A10F9B20{i + 1:04X}",
+                    tail_number=rec_i.tail_number if rec_i else f"ALITHEIA-V{i + 1:02d}",
+                )
+                self.drones.append(drone)
 
         for d in self.drones:
             d.acknowledged_target = np.copy(self.target_pos)
@@ -632,22 +690,42 @@ class SITLWorldEngine:
             else {d.id: np.zeros(3, dtype=float) for d in self.drones}
         )
 
-        # 5b. Flight State Machine Overrides (TAKEOFF, EN_ROUTE, DESCENDING, LANDED)
+        # 5a-2. Sequenced Pad Scramble Progression (TKT-41)
+        if getattr(self, "scramble_active", False):
+            self.scramble_timer += dt
+            for d in self.drones:
+                if not d.crashed and d.flight_state in ("GROUND_IDLE", "LANDED"):
+                    if self.scramble_timer >= getattr(d, "scramble_time", 0.0):
+                        d.flight_state = "TAKEOFF"
+                        d.status = "ACTIVE"
+                        d.landing_stage = "NONE"
+                        d.rotor_rpm = 5200.0
+                        d.vel = np.zeros(3, dtype=float)
+                        d.acc = np.zeros(3, dtype=float)
+                        if d.landing_pad_idx is not None and d.landing_pad_idx in self.landing_pads:
+                            del self.landing_pads[d.landing_pad_idx]
+
+            living = [d for d in self.drones if not d.crashed]
+            if living and all(d.flight_state in ("EN_ROUTE", "CRUISE") for d in living):
+                self.scramble_active = False
+
+        # 5b. Flight State Machine Overrides (TAKEOFF, EN_ROUTE, DESCENDING, LANDED, GROUND_IDLE)
         for drone in self.drones:
             if drone.crashed:
                 continue
 
             if drone.flight_state == "TAKEOFF":
-                # Phase 1: Pure vertical climb to Z >= 20.0m
-                # Horizontal guidance locked to 0 with active velocity braking
-                # Vertical acceleration climbs smoothly up to 5.0 m/s
+                # Phase 1: Pure vertical climb along designated pad corridor to Z >= 20.0m
+                pad_pos = drone.landing_pad if drone.landing_pad is not None else drone.pos
+                to_pad_xy = pad_pos[:2] - drone.pos[:2]
+                hold_ax = float(np.clip(3.0 * to_pad_xy[0] - 4.0 * drone.vel[0], -6.0, 6.0))
+                hold_ay = float(np.clip(3.0 * to_pad_xy[1] - 4.0 * drone.vel[1], -6.0, 6.0))
+
                 target_vz = 5.0
                 climb_az = float(np.clip(4.0 * (target_vz - drone.vel[2]), 0.0, 8.0))
-                brake_ax = float(-4.0 * drone.vel[0])
-                brake_ay = float(-4.0 * drone.vel[1])
-                guidance_accs[drone.id] = np.array([brake_ax, brake_ay, climb_az], dtype=float)
+                guidance_accs[drone.id] = np.array([hold_ax, hold_ay, climb_az], dtype=float)
 
-                # Near launch pad, suppress horizontal avoidance so drone ascends cleanly
+                # Near launch pad, suppress horizontal avoidance so drone ascends cleanly along corridor
                 if drone.pos[2] < 5.0:
                     avoidance_accs[drone.id][0] = 0.0
                     avoidance_accs[drone.id][1] = 0.0
@@ -674,10 +752,13 @@ class SITLWorldEngine:
                     else:
                         drone.flight_state = "CRUISE"
 
-            elif drone.flight_state == "LANDED":
+            elif drone.flight_state in ("LANDED", "GROUND_IDLE"):
                 guidance_accs[drone.id] = np.zeros(3, dtype=float)
                 avoidance_accs[drone.id] = np.zeros(3, dtype=float)
                 tether_accs[drone.id] = np.zeros(3, dtype=float)
+                drone.vel = np.zeros(3, dtype=float)
+                drone.acc = np.zeros(3, dtype=float)
+                drone.rotor_rpm = 0.0
                 drone.vel = np.zeros(3, dtype=float)
                 drone.acc = np.zeros(3, dtype=float)
                 drone.rotor_rpm = 0.0
@@ -780,7 +861,7 @@ class SITLWorldEngine:
                     drone.rotor_rpm = 0.0
                 continue
 
-            if drone.flight_state == "LANDED":
+            if drone.flight_state in ("LANDED", "GROUND_IDLE"):
                 # Grounded on pad: motors disarmed, zero kinematics
                 drone.acc = np.zeros(3, dtype=float)
                 drone.vel = np.zeros(3, dtype=float)
@@ -817,6 +898,8 @@ class SITLWorldEngine:
             # Transition from TAKEOFF to EN_ROUTE once Z >= 20.0m
             if drone.flight_state == "TAKEOFF" and drone.pos[2] >= 20.0:
                 drone.flight_state = "EN_ROUTE"
+                drone.landing_pad = None
+                drone.landing_pad_idx = None
                 # If no living leader exists in the fleet, promote this drone to leader
                 has_living_leader = any(
                     d.is_leader and not d.crashed for d in self.drones if d.id != drone.id
@@ -838,9 +921,10 @@ class SITLWorldEngine:
                     if drone.vel[2] < 0.0:
                         drone.vel[2] = 0.0
 
-            # Floor safety clamp (keep airborne above 0.5m)
-            if drone.pos[2] < 0.5:
-                drone.pos[2] = 0.5
+            # Floor safety clamp (keep airborne above 0.5m, unless taking off from pad)
+            floor_limit = 0.05 if drone.flight_state == "TAKEOFF" else 0.5
+            if drone.pos[2] < floor_limit:
+                drone.pos[2] = floor_limit
                 if drone.vel[2] < 0.0:
                     drone.vel[2] = 0.0
 
@@ -1154,7 +1238,7 @@ class SITLWorldEngine:
         if self.comms_mode != "TETHERED_RELAY":
             return
         current_leader = self.leader
-        if current_leader is None or self.tether_severed:
+        if current_leader is None or self.tether_severed or current_leader.flight_state in ("LANDED", "GROUND_IDLE"):
             return
 
         # Check maximum cable length extension
@@ -1166,7 +1250,7 @@ class SITLWorldEngine:
 
         # Check collision with cable by any follower
         for drone in self.drones:
-            if drone.crashed or drone.is_leader:
+            if drone.crashed or drone.is_leader or drone.flight_state in ("LANDED", "GROUND_IDLE"):
                 continue
 
             d_perp, _ = self._dist_to_segment(
@@ -1208,11 +1292,11 @@ class SITLWorldEngine:
             return accs
         current_leader = self.leader
 
-        if current_leader is None or self.tether_severed:
+        if current_leader is None or self.tether_severed or current_leader.flight_state in ("LANDED", "GROUND_IDLE"):
             return accs
 
         for drone in self.drones:
-            if drone.crashed or drone.is_leader:
+            if drone.crashed or drone.is_leader or drone.flight_state in ("LANDED", "GROUND_IDLE"):
                 continue
 
             d_perp, r_perp = self._dist_to_segment(
@@ -1390,12 +1474,12 @@ class SITLWorldEngine:
 
         for i in range(n):
             drone_i = self.drones[i]
-            if drone_i.crashed or drone_i.flight_state == "LANDED":
+            if drone_i.crashed or drone_i.flight_state in ("LANDED", "GROUND_IDLE"):
                 continue
 
             for j in range(i + 1, n):
                 drone_j = self.drones[j]
-                if drone_j.crashed or drone_j.flight_state == "LANDED":
+                if drone_j.crashed or drone_j.flight_state in ("LANDED", "GROUND_IDLE"):
                     continue
 
                 diff = drone_i.pos - drone_j.pos
@@ -1668,9 +1752,55 @@ class SITLWorldEngine:
         return False
 
     def command_takeoff_drone(self, drone_id: int) -> bool:
-        """Relaunch a landed drone from its pad via vertical takeoff."""
+        """Relaunch a landed or ground-idle drone from its pad via vertical takeoff."""
         for drone in self.drones:
-            if drone.id == drone_id and drone.flight_state == "LANDED":
+            if drone.id == drone_id and drone.flight_state in ("LANDED", "GROUND_IDLE"):
+                drone.flight_state = "TAKEOFF"
+                drone.status = "LOST_LINK" if drone.lost_link else "ACTIVE"
+                drone.landing_stage = "NONE"
+                drone.rotor_rpm = 5200.0
+                drone.vel = np.zeros(3, dtype=float)
+                drone.acc = np.zeros(3, dtype=float)
+                if drone.landing_pad_idx is not None and drone.landing_pad_idx in self.landing_pads:
+                    del self.landing_pads[drone.landing_pad_idx]
+                return True
+        return False
+
+    def command_scramble_swarm(self, stagger_s: float = 1.2) -> Dict[str, Any]:
+        """Initiate sequenced cold scramble from ground pads (TKT-41).
+        Flagship #0 spins up and departs immediately; followers are staggered
+        every stagger_s (default 1.2s) to maintain downwash clearance.
+        Climb along designated pad corridor to Z >= 20.0m before mustering."""
+        if not self.is_in_comms_range():
+            return {
+                "status": "DROPPED",
+                "reason": "OUT_OF_RANGE",
+                "error": f"Fleet is beyond GCS radio horizon ({RADIO_RANGE}m). Scramble command dropped.",
+            }
+
+        grounded = [d for d in self.drones if not d.crashed and d.flight_state in ("GROUND_IDLE", "LANDED")]
+        if not grounded:
+            return {"status": "NOOP", "reason": "NO_GROUNDED_DRONES"}
+
+        # Sort: leader first if present, then followers by id
+        leader_drones = [d for d in grounded if d.is_leader]
+        follower_drones = sorted([d for d in grounded if not d.is_leader], key=lambda d: d.id)
+
+        launch_sequence = leader_drones + follower_drones
+        if not any(d.is_leader for d in self.drones if not d.crashed):
+            if launch_sequence:
+                launch_sequence[0].is_leader = True
+                launch_sequence[0].tier = TIER_LEADER
+
+        self.scramble_stagger = float(stagger_s)
+        self.scramble_timer = 0.0
+        self.scramble_active = True
+
+        stagger_order = []
+        for idx, drone in enumerate(launch_sequence):
+            drone.scramble_time = round(idx * self.scramble_stagger, 2)
+            stagger_order.append({"drone_id": drone.id, "scramble_time": drone.scramble_time})
+            if drone.scramble_time <= 0.0:
                 drone.flight_state = "TAKEOFF"
                 drone.status = "ACTIVE"
                 drone.landing_stage = "NONE"
@@ -1679,29 +1809,51 @@ class SITLWorldEngine:
                 drone.acc = np.zeros(3, dtype=float)
                 if drone.landing_pad_idx is not None and drone.landing_pad_idx in self.landing_pads:
                     del self.landing_pads[drone.landing_pad_idx]
-                drone.landing_pad_idx = None
-                drone.landing_pad = None
-                return True
-        return False
 
-    def launch_reinforcement(self, rejoin_target: Optional[np.ndarray] = None) -> Drone:
-        """Deploy a new reinforcement drone from the base launch pad (TKT-50).
+        return {
+            "status": "SCRAMBLE_INITIATED",
+            "drone_count": len(launch_sequence),
+            "stagger_s": self.scramble_stagger,
+            "sequence": stagger_order,
+        }
+
+    def command_cold_start_swarm(self, count: Optional[int] = None) -> Dict[str, Any]:
+        """Cold ground reset: resets or grounds fleet onto numbered ground launch pads (TKT-41)."""
+        n = count if count is not None else len(self.drones)
+        self.cold_start = True
+        self._init_fleet(n, cold_start=True)
+        return {"status": "COLD_START_ACTIVE", "drone_count": n}
+
+    def spawn_reinforcement(
+        self,
+        rejoin_target: Optional[Union[np.ndarray, List[float]]] = None,
+        auto_launch: bool = False,
+    ) -> Drone:
+        """Deploy a new reinforcement drone from the base launch pad (TKT-41 & TKT-50).
         Assigns the next sequential drone ID (max_id + 1).
-        Spawns on the base launch pad as an unenrolled Scout, climbing vertically
-        to safe cruise altitude (Z >= 20m) before transiting to seek and rejoin
-        the active swarm via P2P handshake (RANGE_P2P = 60.0m)."""
+        Spawns on the base launch pad as an unenrolled Scout.
+        If auto_launch=False:
+            - Places drone cold on pad in GROUND_IDLE (Z=0.05m, 0 RPM).
+            - Generates tactical pre-briefing:
+                - Active contact: 'FLEET_ACTIVE: Gang in contact at [pos]. Rendezvous target [target].'
+                - Comms lost: 'FLEET_LOST: Gang lost near [pos] en route to [target].'
+        If auto_launch=True:
+            - Immediately spools up motors to 5200 RPM in TAKEOFF corridor climb.
+        """
         current_max = max((d.id for d in self.drones), default=-1)
         self._highest_drone_id = max(getattr(self, "_highest_drone_id", -1), current_max) + 1
         new_id = self._highest_drone_id
 
         # Base launch pad coordinates outside the 3.0m tether clearance envelope
-        slot_idx = new_id % 8
-        spawn_pos = self.get_pad_position(slot_idx)
+        pad_idx = new_id % 8
+        spawn_pos = self.get_pad_position(pad_idx)
+        if not auto_launch:
+            spawn_pos[2] = 0.05
 
         # Allocate standby reserve from FleetRegistry (TKT-48)
         if hasattr(self, "fleet_registry"):
             reserve_rec = self.fleet_registry.allocate_reserve(
-                drone_id=new_id, pad_id=slot_idx, sim_time=self.sim_time
+                drone_id=new_id, pad_id=pad_idx, sim_time=self.sim_time
             )
             hw_uid = reserve_rec.hardware_uid
             tail_num = reserve_rec.tail_number
@@ -1717,41 +1869,61 @@ class SITLWorldEngine:
             hardware_uid=hw_uid,
             tail_number=tail_num,
         )
-        drone.flight_state = "TAKEOFF"
-        drone.status = "ACTIVE"
         drone.enrolled = False
         drone.enrollment_status = "SCOUT"
         drone.vel = np.zeros(3, dtype=float)
         drone.acc = np.zeros(3, dtype=float)
-        drone.rotor_rpm = 5200.0
+        drone.landing_pad_idx = pad_idx
+        drone.landing_pad = np.copy(spawn_pos)
+        self.landing_pads[pad_idx] = drone.id
 
         current_leader = self.leader
+        ack_tgt = self.get_acknowledged_target()
+
+        # Generate pre-briefing
         if rejoin_target is not None:
             drone.rejoin_target = np.array(rejoin_target, dtype=float)
             drone.lkp = np.copy(drone.rejoin_target)
             drone.last_heartbeat_time = self.sim_time
             drone.lost_link = False
+            drone.briefing = f"CUSTOM_MISSION: Rendezvous vector designated at [{drone.rejoin_target[0]:.1f}, {drone.rejoin_target[1]:.1f}, {drone.rejoin_target[2]:.1f}]."
         elif current_leader is not None and not current_leader.crashed:
             dist_to_leader = float(np.linalg.norm(spawn_pos - current_leader.pos))
-            # If within GCS Howl (140m), GCS downlinks fleet target coordinates to scout
-            if dist_to_leader <= RANGE_HOWL:
+            if dist_to_leader <= RANGE_HOWL and self.is_in_comms_range():
                 drone.lkp = np.copy(current_leader.pos)
-                drone.rejoin_target = np.copy(self.get_acknowledged_target())
+                drone.rejoin_target = np.copy(ack_tgt)
                 drone.last_heartbeat_time = self.sim_time
                 drone.lost_link = False
+                lead_pos_str = f"[{current_leader.pos[0]:.1f}, {current_leader.pos[1]:.1f}, {current_leader.pos[2]:.1f}]"
+                tgt_str = f"[{ack_tgt[0]:.1f}, {ack_tgt[1]:.1f}, {ack_tgt[2]:.1f}]"
+                drone.briefing = f"FLEET_ACTIVE: Gang in contact at {lead_pos_str}. Rendezvous target {tgt_str}."
             else:
-                # Leader is outside radio range of base pad: muster at local base station (TKT-41 & FIX-04)
+                lead_pos_str = f"[{current_leader.pos[0]:.1f}, {current_leader.pos[1]:.1f}, {current_leader.pos[2]:.1f}]"
+                tgt_str = f"[{ack_tgt[0]:.1f}, {ack_tgt[1]:.1f}, {ack_tgt[2]:.1f}]"
                 drone.lkp = np.array([0.0, 0.0, 20.0], dtype=float)
                 drone.rejoin_target = np.array([0.0, 0.0, 20.0], dtype=float)
-                drone.last_heartbeat_time = -100.0  # Timed out from start
+                drone.last_heartbeat_time = -100.0
                 drone.lost_link = True
                 drone.status = "LOST_LINK"
+                drone.briefing = f"FLEET_LOST: Gang lost near {lead_pos_str} en route to {tgt_str}."
         else:
             drone.lkp = np.array([0.0, 0.0, 20.0], dtype=float)
             drone.rejoin_target = np.array([0.0, 0.0, 20.0], dtype=float)
             drone.last_heartbeat_time = -100.0
             drone.lost_link = True
             drone.status = "LOST_LINK"
+            drone.briefing = "FLEET_OFFLINE: No active leader broadcast detected. Holding base corridor."
+
+        if auto_launch:
+            drone.flight_state = "TAKEOFF"
+            drone.status = "LOST_LINK" if drone.lost_link else "ACTIVE"
+            drone.rotor_rpm = 5200.0
+            if drone.landing_pad_idx is not None and drone.landing_pad_idx in self.landing_pads:
+                del self.landing_pads[drone.landing_pad_idx]
+        else:
+            drone.flight_state = "GROUND_IDLE"
+            drone.status = "GROUND_IDLE"
+            drone.rotor_rpm = 0.0
 
         self.drones.append(drone)
 
@@ -1761,6 +1933,10 @@ class SITLWorldEngine:
             p_state.gossip_status = "SCOUT"
 
         return drone
+
+    def launch_reinforcement(self, rejoin_target: Optional[Union[np.ndarray, List[float]]] = None) -> Drone:
+        """Deploy reinforcement and immediately launch (backward-compatible alias)."""
+        return self.spawn_reinforcement(rejoin_target=rejoin_target, auto_launch=True)
 
     def kill_leader(self) -> None:
         """Trigger emergency motor cut on active leader."""
@@ -2061,14 +2237,17 @@ class SITLWorldEngine:
             "swarm_rtb_active": self.swarm_rtb_active,
             "overhead_marshal_active": self.overhead_marshal_active,
             "recovery_stage": self.recovery_stage,
+            "cold_start": bool(getattr(self, "cold_start", False)),
+            "scramble_active": bool(getattr(self, "scramble_active", False)),
+            "scramble_timer": round(float(getattr(self, "scramble_timer", 0.0)), 2),
             "landing_pads": {int(k): v for k, v in self.landing_pads.items()},
             "tether": {
                 "anchor": [round(float(v), 2) for v in self.tether_anchor],
                 "leader_id": current_leader.id if current_leader else -1,
                 "severed": self.tether_severed if self.comms_mode == "TETHERED_RELAY" else False,
                 "length": round(tether_len, 2),
-                "deployed": (self.comms_mode == "TETHERED_RELAY"),
-                "visible": (self.comms_mode == "TETHERED_RELAY" and not self.tether_severed),
+                "deployed": (self.comms_mode == "TETHERED_RELAY" and (current_leader is not None and current_leader.flight_state not in ("LANDED", "GROUND_IDLE"))),
+                "visible": (self.comms_mode == "TETHERED_RELAY" and not self.tether_severed and (current_leader is not None and current_leader.flight_state not in ("LANDED", "GROUND_IDLE"))),
             },
             "drones": drones_list,
             "fleet_registry": self.fleet_registry.get_registry_snapshot() if hasattr(self, "fleet_registry") else {},

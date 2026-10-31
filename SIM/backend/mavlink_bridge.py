@@ -250,7 +250,7 @@ class MavlinkBridge:
             self.sim.reboot_drone(drone_id)
             return {"status": "OK", "cmd": cmd, "rebooted_id": drone_id}
 
-        elif cmd in ("LAUNCH_REINFORCEMENT", "REINFORCE_SWARM", "SPAWN_REINFORCEMENT"):
+        elif cmd in ("LAUNCH_REINFORCEMENT", "REINFORCE_SWARM"):
             new_drone = self.sim.launch_reinforcement()
             return {
                 "status": "OK",
@@ -328,6 +328,24 @@ class MavlinkBridge:
             drone_id = int(cmd_dict.get("id", cmd_dict.get("drone_id", 0)))
             success = self.sim.command_takeoff_drone(drone_id)
             return {"status": "OK" if success else "ERROR", "cmd": cmd, "drone_id": drone_id}
+
+        elif cmd in ("SPAWN_REINFORCEMENT", "SPAWN_DRONE", "STAGE_REINFORCEMENT"):
+            new_drone = self.sim.spawn_reinforcement(auto_launch=False)
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "drone_id": new_drone.id,
+                "briefing": new_drone.briefing,
+                "total_drones": len(self.sim.drones),
+            }
+
+        elif cmd in ("SCRAMBLE_SWARM", "SCRAMBLE", "PAD_SCRAMBLE"):
+            stagger = float(cmd_dict.get("stagger", 1.2))
+            return self.sim.command_scramble_swarm(stagger_s=stagger)
+
+        elif cmd in ("COLD_RESET", "COLD_GROUND", "COLD_START"):
+            count = cmd_dict.get("count", None)
+            return self.sim.command_cold_start_swarm(count=int(count) if count is not None else None)
 
         elif cmd == "SET_BRAIN":
             name = cmd_dict.get("brain", "LEADER_FOLLOWER")
@@ -857,12 +875,10 @@ class MavlinkBridge:
 
             # MAV_CMD_NAV_TAKEOFF (24)
             if cmd == mavlink2.MAV_CMD_NAV_TAKEOFF:
+                self.sim.command_scramble_swarm()
                 for d in self.sim.drones:
                     d.armed = True
-                    if d.flight_state == "LANDED":
-                        d.flight_state = "TAKEOFF"
-                        d.target_altitude = 20.0
-                self.send_mavlink_statustext("[C2] Swarm TAKEOFF sequence engaged", dest_addr=addr, src_sys=target_sys)
+                self.send_mavlink_statustext("[C2] Swarm TAKEOFF / Scramble sequence engaged", dest_addr=addr, src_sys=target_sys)
                 self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr, src_sys=target_sys)
                 return {"status": "OK", "cmd": "MAV_CMD_NAV_TAKEOFF", "sys_id": target_sys}
 
