@@ -14,8 +14,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Union
 import numpy as np
 
-# Radio Comms & Range Constants
-RADIO_RANGE: float = 120.0
+# Radio Comms & Range Constants (Canine Taxonomy - TKT-49)
+RANGE_HOWL: float = 140.0
+RANGE_BARK: float = 90.0
+RANGE_YIP: float = 50.0
+RANGE_P2P: float = 60.0
+RADIO_RANGE: float = RANGE_HOWL
 TETHER_ANCHOR = np.array([0.0, 0.0, 1.5], dtype=float)
 
 # Discrete Waypoint Mission Route Presets (TKT-28 & TKT-30)
@@ -219,19 +223,23 @@ class C2Gateway:
             if leader is None or leader.crashed or getattr(leader, "lost_link", False):
                 return False
             d_gcs = float(np.linalg.norm(leader.pos - anchor))
-            if d_gcs > RADIO_RANGE:
+            if d_gcs > RANGE_BARK:
                 return False
-            if hasattr(self.sim, "is_packet_dropped") and self.sim.is_packet_dropped(d_gcs, is_hardline=False):
+            if hasattr(leader, "downlink_active") and not leader.downlink_active:
+                return False
+            if hasattr(self.sim, "is_packet_dropped") and self.sim.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_BARK):
                 return False
             return True
 
-        # 3. P2P Gossip Mesh: Needs at least one non-crashed gateway drone in GCS radio range
+        # 3. P2P Gossip Mesh: Needs at least one non-crashed gateway drone with active downlink
         elif active_brain == "GOSSIP_CONSENSUS" or comms_mode == "P2P_GOSSIP_MESH":
             living = [d for d in drones if not d.crashed]
             if not living:
                 return False
+            if living and hasattr(living[0], "downlink_active"):
+                return any(d.downlink_active for d in living)
             min_dist = min(float(np.linalg.norm(d.pos - anchor)) for d in living)
-            if min_dist > RADIO_RANGE:
+            if min_dist > RANGE_HOWL:
                 return False
             if hasattr(self.sim, "is_packet_dropped") and self.sim.is_packet_dropped(min_dist, is_hardline=False):
                 return False

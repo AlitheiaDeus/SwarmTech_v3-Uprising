@@ -515,8 +515,9 @@
             const isTetherSevered = frame.tether && frame.tether.severed && frame.comms_mode === 'TETHERED_RELAY';
             const hasLostLinkLoiter = frame.lost_link_loiter_timer !== undefined && frame.lost_link_loiter_timer > 0;
             const allDronesLostLink = Array.isArray(frame.drones) && frame.drones.length > 0 && frame.drones.every(d => d.crashed || d.lost_link);
+            const anyYipLost = Array.isArray(frame.drones) && frame.drones.some(d => !d.crashed && d.yip_lost);
 
-            if (isTetherSevered || hasLostLinkLoiter || allDronesLostLink || frame.swarm_rtb_active) {
+            if (isTetherSevered || hasLostLinkLoiter || allDronesLostLink || frame.swarm_rtb_active || anyYipLost) {
                 failsafePill.classList.remove('hidden');
                 if (frame.recovery_stage === 'LANDING' || frame.recovery_stage === 'COMPLETE') {
                     failsafePill.className = 'status-pill failsafe-pill failsafe-rtb';
@@ -531,9 +532,15 @@
                 } else if (isTetherSevered) {
                     failsafePill.className = 'status-pill failsafe-pill failsafe-untethered';
                     failsafeText.textContent = 'UNTETHERED CRUISE (MISSION RESUMED)';
+                } else if (allDronesLostLink) {
+                    failsafePill.className = 'status-pill failsafe-pill failsafe-loiter';
+                    failsafeText.textContent = 'RF LINK LOST: FLEET OUTSIDE 140m HOWL HORIZON';
+                } else if (anyYipLost) {
+                    failsafePill.className = 'status-pill failsafe-pill failsafe-untethered';
+                    failsafeText.textContent = 'UPLINK: ACTIVE | DOWNLINK: SILENT (YIP LOST)';
                 } else {
                     failsafePill.className = 'status-pill failsafe-pill failsafe-loiter';
-                    failsafeText.textContent = 'RF LINK LOST: FLEET OUTSIDE 120m HORIZON';
+                    failsafeText.textContent = 'RF LINK LOST: FLEET OUTSIDE 140m HOWL HORIZON';
                 }
             } else {
                 failsafePill.classList.add('hidden');
@@ -786,6 +793,19 @@
                 card.elLandBtn.className = 'card-btn-action btn-land';
             }
             setActionBtn('KILL', 'card-btn-action btn-kill');
+        } else if (drone.yip_lost) {
+            card.el.classList.add('yip-lost-card');
+            card.elStatus.textContent = 'YIP LOST';
+            card.elStatus.className = 'status-tag tag-yip-lost';
+            const relayStr = (drone.gateway_id !== null && drone.gateway_id !== undefined && drone.gateway_id !== drone.id)
+                ? ` [RELAY #${drone.gateway_id}]` : ' [SILENT]';
+            card.elRole.textContent = `TIER-${drone.tier}${relayStr}`;
+            if (card.elLandBtn) {
+                card.elLandBtn.style.display = 'inline-block';
+                card.elLandBtn.textContent = 'LAND';
+                card.elLandBtn.className = 'card-btn-action btn-land';
+            }
+            setActionBtn('KILL', 'card-btn-action btn-kill');
         } else if (drone.lost_link) {
             card.el.classList.add('lkp-card');
             card.elStatus.textContent = 'LKP RECOVERY';
@@ -797,7 +817,9 @@
             card.el.classList.add('gossip-card');
             card.elStatus.textContent = 'ECHO WAVE';
             card.elStatus.className = 'status-tag tag-gossip';
-            card.elRole.textContent = `TIER-${drone.tier}`;
+            const relayStr = (drone.gateway_id !== null && drone.gateway_id !== undefined && drone.gateway_id !== drone.id)
+                ? ` [GW #${drone.gateway_id}]` : '';
+            card.elRole.textContent = `TIER-${drone.tier}${relayStr}`;
             if (card.elLandBtn) {
                 card.elLandBtn.style.display = 'inline-block';
                 card.elLandBtn.textContent = 'LAND';
@@ -807,7 +829,9 @@
         } else {
             card.elStatus.textContent = overheadMarshalActive ? 'OVERHEAD HOLD' : 'ACTIVE';
             card.elStatus.className = overheadMarshalActive ? 'status-tag tag-hold' : 'status-tag tag-active';
-            card.elRole.textContent = `TIER-${drone.tier}`;
+            const relayStr = (drone.gateway_id !== null && drone.gateway_id !== undefined && drone.gateway_id !== drone.id)
+                ? ` [GW #${drone.gateway_id}]` : '';
+            card.elRole.textContent = `TIER-${drone.tier}${relayStr}`;
             if (card.elLandBtn) {
                 card.elLandBtn.style.display = 'inline-block';
                 card.elLandBtn.textContent = 'LAND';
@@ -988,12 +1012,12 @@
     function onCommandAck(ack) {
         if (!ack || !ack.cmd) return;
         if (ack.status === 'OUT_OF_RANGE' || ack.status === 'DROPPED') {
-            logEvent('WARN', `[RF REJECTED] ${ack.cmd}: ${ack.error || ack.reason || 'Fleet outside 120m radio horizon'}`);
+            logEvent('WARN', `[RF REJECTED] ${ack.cmd}: ${ack.error || ack.reason || 'Fleet outside 140m GCS Howl horizon'}`);
             const failPill = document.getElementById('hud-failsafe-pill');
             const failText = document.getElementById('hud-failsafe-text');
             if (failPill && failText) {
                 failPill.classList.remove('hidden');
-                failText.textContent = 'RF LINK OUT OF RANGE (>120m)';
+                failText.textContent = 'RF LINK OUT OF RANGE (>140m)';
                 setTimeout(() => failPill.classList.add('hidden'), 4000);
             }
             return;

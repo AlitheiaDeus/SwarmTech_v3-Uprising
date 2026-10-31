@@ -54,6 +54,10 @@ class Drone:
         self.last_heartbeat_time: float = 0.0
         self.rssi: float = -45.0           # Signal strength (dBm) (TKT-17)
         self.link_quality: float = 1.0     # Normalized link quality [0.0, 1.0] (TKT-17)
+        self.uplink_active: bool = True    # True if within GCS Howl range (TKT-49)
+        self.downlink_active: bool = True  # True if direct or gateway relay to GCS (TKT-49)
+        self.yip_lost: bool = False        # True if uplink received but downlink silent (TKT-49)
+        self.gateway_id: Optional[int] = None # ID of mesh node relaying to GCS (TKT-49)
 
         # Status & Battery
         self.battery: float = 100.0
@@ -112,6 +116,10 @@ class Drone:
         self.last_heartbeat_time = 0.0
         self.rssi = -45.0
         self.link_quality = 1.0
+        self.uplink_active = True
+        self.downlink_active = True
+        self.yip_lost = False
+        self.gateway_id = None
         self.battery = 100.0
         self.is_leader = is_leader
         self.status = "FLEET_LEADER" if is_leader else "ACTIVE"
@@ -164,6 +172,10 @@ class Drone:
             "lkp": [round(float(v), 2) for v in self.lkp],
             "rssi": round(float(self.rssi), 1),
             "link_quality": round(float(self.link_quality), 2),
+            "uplink_active": self.uplink_active,
+            "downlink_active": self.downlink_active,
+            "yip_lost": self.yip_lost,
+            "gateway_id": self.gateway_id,
             "battery": round(float(self.battery), 1),
             "status": self.status,
             "rotor_rpm": round(float(self.rotor_rpm), 0),

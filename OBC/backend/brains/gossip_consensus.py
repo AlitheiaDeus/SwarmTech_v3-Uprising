@@ -16,7 +16,12 @@ if TYPE_CHECKING:
     from SIM.backend.sitl_engine import SwarmSimulator
     from OBC.backend.drone_firmware import Drone
 
-RADIO_RANGE: float = 120.0
+# Radio Comms & Asymmetric Link Budget (Canine Acoustic Taxonomy - TKT-49)
+RANGE_HOWL: float = 140.0              # High-power GCS mast TX (blasting uplink) (m)
+RANGE_BARK: float = 90.0               # Tier-1 Flagship onboard TX (leader downlink) (m)
+RANGE_YIP: float = 50.0                # Tier-2 Escort micro-transceiver (escort downlink) (m)
+RANGE_P2P: float = 60.0                # Inter-drone P2P mesh gossip radio propagation limit (m)
+RADIO_RANGE: float = RANGE_HOWL        # Backward-compatible generic radio horizon alias (m)
 HEARTBEAT_INTERVAL: float = 0.1
 V_CRUISE: float = 12.0
 V_LKP: float = 6.0
@@ -163,11 +168,11 @@ class GossipConsensusBrain(BaseBrain):
                     continue
 
                 dist = float(np.linalg.norm(drone.pos - peer.pos))
-                if dist > RADIO_RANGE:
-                    continue  # Out of radio range
+                if dist > RANGE_P2P:
+                    continue  # Out of inter-drone P2P mesh radio range (60m)
 
                 # Physics-based packet drop from path loss & EW jamming
-                if self.sim.is_packet_dropped(dist, is_hardline=False):
+                if self.sim.is_packet_dropped(dist, is_hardline=False, max_range=RANGE_P2P):
                     continue
 
                 peer_pkt = packets[peer.id]
@@ -617,7 +622,7 @@ class GossipConsensusBrain(BaseBrain):
         which immediately begins echoing to its peers across the mesh."""
         new_target_arr = np.array(new_target, dtype=float)
 
-        # Find closest active drone within GCS radio range (120m)
+        # Find closest active drone within GCS Howl radio range (140m)
         active_drones = [d for d in self.sim.drones if not d.crashed]
         if not active_drones:
             return {"status": "NO_ACTIVE_DRONES", "error": "No living drones in swarm"}
@@ -625,13 +630,13 @@ class GossipConsensusBrain(BaseBrain):
         drones_in_range = []
         for d in active_drones:
             dist_to_gcs = float(np.linalg.norm(d.pos - self.sim.tether_anchor))
-            if dist_to_gcs <= RADIO_RANGE:
+            if dist_to_gcs <= RANGE_HOWL:
                 drones_in_range.append((dist_to_gcs, d))
 
         if not drones_in_range:
             return {
                 "status": "OUT_OF_RANGE",
-                "error": f"No active drones within GCS radio range ({RADIO_RANGE}m)",
+                "error": f"No active drones within GCS Howl radio range ({RANGE_HOWL}m)",
             }
 
         # Seed target into closest drone to GCS anchor

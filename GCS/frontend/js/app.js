@@ -132,9 +132,15 @@
     }
 
     function createTacticalRangeRings() {
-        // [25m, 50m, 100m, 120m GCS RF Uplink Horizon]
-        const radii = [25, 50, 100, 120];
-        radii.forEach((r, idx) => {
+        // Canine Acoustic Taxonomy: 50m Yip, 60m P2P, 90m Bark, 140m Howl (TKT-49)
+        const ringDefs = [
+            { r: 25, color: 0x0088AA, dash: false, op: 0.4 },
+            { r: 50, color: 0x0088FF, dash: false, op: 0.6 },  // 50m Yip Escort Downlink
+            { r: 60, color: 0x00FFAA, dash: true, op: 0.45 },  // 60m P2P Mesh Gossip Limit
+            { r: 90, color: 0xFFB800, dash: false, op: 0.75 }, // 90m Bark Flagship Downlink
+            { r: 140, color: 0x00F0FF, dash: true, op: 0.9 },  // 140m Howl GCS Uplink Horizon
+        ];
+        ringDefs.forEach(({ r, color, dash, op }) => {
             const curve = new THREE.EllipseCurve(
                 0, 0, r, r, 0, 2 * Math.PI, false, 0
             );
@@ -142,17 +148,20 @@
             const geometry = new THREE.BufferGeometry().setFromPoints(
                 points.map(p => new THREE.Vector3(p.x, p.y, 0.05))
             );
-            const isGcsHorizon = (r === 120);
-            const material = new THREE.LineDashedMaterial({
-                color: isGcsHorizon ? 0x00F0FF : (idx === 2 ? COLORS.ring100 : COLORS.ring25),
-                dashSize: isGcsHorizon ? 5 : 3,
-                gapSize: isGcsHorizon ? 3 : 2,
+            const material = dash ? new THREE.LineDashedMaterial({
+                color: color,
+                dashSize: r === 140 ? 5 : 3,
+                gapSize: r === 140 ? 3 : 2,
                 linewidth: 1,
                 transparent: true,
-                opacity: isGcsHorizon ? 0.85 : 0.65,
+                opacity: op,
+            }) : new THREE.LineBasicMaterial({
+                color: color,
+                transparent: true,
+                opacity: op,
             });
             const line = new THREE.Line(geometry, material);
-            line.computeLineDistances();
+            if (dash) line.computeLineDistances();
             scene.add(line);
         });
     }
@@ -755,7 +764,7 @@
     function updateDroneBadge(sprite, d) {
         if (!sprite || !sprite.userData) return;
         const { canvas, texture } = sprite.userData;
-        const key = `${d.id}_${d.is_leader}_${d.crashed}_${d.lost_link}_${d.flight_state}_${d.status}_${d.is_2ic}_${d.landing_pad_idx}`;
+        const key = `${d.id}_${d.is_leader}_${d.crashed}_${d.lost_link}_${d.yip_lost}_${d.flight_state}_${d.status}_${d.is_2ic}_${d.landing_pad_idx}`;
         if (sprite.userData.lastKey === key) return;
         sprite.userData.lastKey = key;
 
@@ -828,6 +837,13 @@
             labelText = `#${d.id}`;
             subText = 'EN ROUTE';
             dotColor = '#00F0FF';
+        } else if (d.yip_lost) {
+            borderColor = '#FF9900';
+            bgColor = 'rgba(40, 20, 0, 0.92)';
+            textColor = '#FFB800';
+            labelText = `#${d.id}`;
+            subText = 'YIP LOST';
+            dotColor = '#FF9900';
         } else if (d.lost_link) {
             borderColor = '#FFB800';
             bgColor = 'rgba(38, 26, 5, 0.92)';
@@ -949,7 +965,7 @@
 
                 // Update target kinematics for interpolation
                 // When telemetry link is lost, freeze avatar at LKP (The Operator Airgap)
-                const renderPos = (d.lost_link && Array.isArray(d.lkp)) ? d.lkp : d.pos;
+                const renderPos = ((d.lost_link || !d.downlink_active) && Array.isArray(d.lkp)) ? d.lkp : d.pos;
                 entry.targetPos.set(renderPos[0], renderPos[1], renderPos[2]);
                 entry.targetYaw = d.yaw || 0;
                 entry.targetPitch = d.pitch || 0;
@@ -985,7 +1001,14 @@
                     rotorColor = 0xFFAA00; // Bright amber jettison
                     rotorOpacity = 0.7;
                     indicatorColor = 0xFFAA00;
-                } else if (d.lost_link) {
+                } else if (d.yip_lost) {
+            borderColor = '#FF9900';
+            bgColor = 'rgba(40, 20, 0, 0.92)';
+            textColor = '#FFB800';
+            labelText = `#${d.id}`;
+            subText = 'YIP LOST';
+            dotColor = '#FF9900';
+        } else if (d.lost_link) {
                     rotorColor = 0xFFB800; // Amber ghost for lost-link LKP freeze
                     rotorOpacity = 0.3;
                     indicatorColor = 0xFFAA00;

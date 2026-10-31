@@ -602,6 +602,16 @@ body:has(#right-panel.collapsed) #tab-restore-right,
   border: 1px solid var(--neon-amber);
 }
 
+.tag-yip-lost {
+  color: #FF9900;
+  background: rgba(255, 153, 0, 0.2);
+  border: 1px solid #FF9900;
+}
+
+.yip-lost-card {
+  border-color: rgba(255, 153, 0, 0.6) !important;
+}
+
 .tag-gossip {
   color: var(--neon-cyan);
   background: rgba(0, 240, 255, 0.15);

@@ -14,7 +14,17 @@ import unittest
 import numpy as np
 from typing import Dict, Any
 
-from SIM.backend.sitl_engine import SwarmSimulator, RADIO_RANGE, TETHER_ANCHOR
+from SIM.backend.sitl_engine import (
+    SwarmSimulator,
+    RADIO_RANGE,
+    RANGE_HOWL,
+    RANGE_BARK,
+    RANGE_YIP,
+    RANGE_P2P,
+    TETHER_ANCHOR,
+    TIER_LEADER,
+    TIER_ESCORT,
+)
 from GCS.backend.web_server import SwarmWebServer
 from SIM.backend.mavlink_bridge import MavlinkBridge
 
@@ -98,21 +108,21 @@ class TestTriModeRF(unittest.TestCase):
         # At d = 0m: loss = 0.0
         self.assertAlmostEqual(self.sim.calculate_packet_drop_prob(0.0), 0.0, places=4)
 
-        # At d = 60m (half range): loss = 0.25 * (0.5)^2 = 0.0625 (6.25%)
-        self.assertAlmostEqual(self.sim.calculate_packet_drop_prob(60.0), 0.0625, places=4)
+        # At d = 70m (half of 140m Howl range): loss = 0.25 * (0.5)^2 = 0.0625 (6.25%)
+        self.assertAlmostEqual(self.sim.calculate_packet_drop_prob(70.0), 0.0625, places=4)
 
-        # At d = 120m (edge of range): loss = 0.25 * (1.0)^2 = 0.25 (25%)
-        self.assertAlmostEqual(self.sim.calculate_packet_drop_prob(120.0), 0.25, places=4)
+        # At d = 140m (edge of range): loss = 0.25 * (1.0)^2 = 0.25 (25%)
+        self.assertAlmostEqual(self.sim.calculate_packet_drop_prob(140.0), 0.25, places=4)
 
-        # At d > 120m: loss = 1.0 (100% out of range)
-        self.assertEqual(self.sim.calculate_packet_drop_prob(121.0), 1.0)
+        # At d > 140m: loss = 1.0 (100% out of range)
+        self.assertEqual(self.sim.calculate_packet_drop_prob(141.0), 1.0)
 
         # 3. Contested RF with Jamming (gamma = 0.3)
         self.sim.set_rf_jamming(0.3)
         # At d = 0m: loss = 0.3 (30%)
         self.assertAlmostEqual(self.sim.calculate_packet_drop_prob(0.0), 0.3, places=4)
-        # At d = 120m: loss = 0.3 + 0.7 * 0.25 = 0.475 (47.5%)
-        self.assertAlmostEqual(self.sim.calculate_packet_drop_prob(120.0), 0.475, places=4)
+        # At d = 140m: loss = 0.3 + 0.7 * 0.25 = 0.475 (47.5%)
+        self.assertAlmostEqual(self.sim.calculate_packet_drop_prob(140.0), 0.475, places=4)
 
         # Jamming clamp to 0.5
         self.sim.set_rf_jamming(0.9)
@@ -129,7 +139,7 @@ class TestTriModeRF(unittest.TestCase):
 
     def test_wireless_leader_lost_link_gcs_horizon(self):
         """In LEADER_FOLLOWER mode, leader communicates with GCS over RF.
-        Exceeding 120m GCS horizon triggers lost link on leader."""
+        Exceeding 140m GCS Howl horizon triggers lost link on leader."""
         self.sim.set_comms_mode("LEADER_FOLLOWER")
         leader = self.sim.leader
         self.assertIsNotNone(leader)
@@ -139,8 +149,8 @@ class TestTriModeRF(unittest.TestCase):
             self.sim.step()
         self.assertFalse(leader.lost_link)
 
-        # Teleport leader outside GCS horizon (140m > 120m)
-        leader.pos = np.array([140.0, 0.0, 25.0], dtype=float)
+        # Teleport leader outside GCS horizon (160m > 140m)
+        leader.pos = np.array([160.0, 0.0, 25.0], dtype=float)
 
         # Advance 1.2s (> 1.0s LINK_TIMEOUT = 72 ticks)
         for _ in range(75):
@@ -149,7 +159,7 @@ class TestTriModeRF(unittest.TestCase):
         self.assertTrue(leader.lost_link)
         self.assertEqual(leader.status, "LOST_LINK")
 
-        # Teleport leader back within GCS horizon (< 120m)
+        # Teleport leader back within GCS horizon (< 140m)
         leader.pos = np.array([30.0, 0.0, 25.0], dtype=float)
         for _ in range(12):
             self.sim.step()
@@ -157,50 +167,61 @@ class TestTriModeRF(unittest.TestCase):
         self.assertFalse(leader.lost_link)
 
     def test_gcs_target_dispatch_horizon_checks(self):
-        """GCS target dispatch verifies active drone presence within 120m radio horizon."""
-        # 1. LEADER_FOLLOWER: Leader outside 120m horizon rejects dispatch
+        """GCS target dispatch verifies active drone presence within 140m GCS Howl radio horizon."""
+        # 1. LEADER_FOLLOWER: Leader outside 140m horizon rejects dispatch
         self.sim.set_comms_mode("LEADER_FOLLOWER")
         leader = self.sim.leader
-        leader.pos = np.array([150.0, 0.0, 25.0], dtype=float)
+        leader.pos = np.array([160.0, 0.0, 25.0], dtype=float)
 
-        res = self.sim.set_target([150.0, 50.0, 30.0])
+        res = self.sim.set_target([160.0, 50.0, 30.0])
         self.assertEqual(res["status"], "OUT_OF_RANGE")
 
-        # Bring leader inside horizon (< 120m)
+        # Bring leader inside horizon (< 140m)
         leader.pos = np.array([50.0, 0.0, 25.0], dtype=float)
         res = self.sim.set_target([60.0, 40.0, 30.0])
         self.assertEqual(res["status"], "OK")
 
-        # 2. GOSSIP_CONSENSUS: Mesh requires at least one node within 120m of Base
+        # 2. GOSSIP_CONSENSUS: Mesh requires at least one node within 140m Howl range of Base
         self.sim.set_comms_mode("GOSSIP_CONSENSUS")
 
-        # Move all drones out to 150m
+        # Move all drones out to 160m (> 140m)
         for d in self.sim.drones:
-            d.pos = np.array([150.0, d.id * 5.0, 25.0], dtype=float)
+            d.pos = np.array([160.0, d.id * 5.0, 25.0], dtype=float)
 
-        res = self.sim.set_target([150.0, 80.0, 30.0])
+        res = self.sim.set_target([160.0, 80.0, 30.0])
         self.assertEqual(res["status"], "OUT_OF_RANGE")
 
         # Bring just one drone (Drone 2) within GCS range
         self.sim.drones[2].pos = np.array([30.0, 0.0, 20.0], dtype=float)
-        res = self.sim.set_target([150.0, 80.0, 30.0])
+        res = self.sim.set_target([160.0, 80.0, 30.0])
         self.assertEqual(res["status"], "OK")
         self.assertEqual(res["seed_drone_id"], 2)
 
     def test_telemetry_snapshot_contains_rf_and_mode_data(self):
-        """Snapshot must include comms_mode, rf_jamming, gcs_radio_range, and per-drone RSSI."""
+        """Snapshot must include comms_mode, rf_jamming, gcs_radio_range, rf_link_budget, and per-drone RSSI."""
         self.sim.set_comms_mode("LEADER_FOLLOWER")
         self.sim.set_rf_jamming(0.25)
 
         snap = self.sim.get_state_snapshot()
         self.assertEqual(snap["comms_mode"], "LEADER_FOLLOWER")
         self.assertEqual(snap["rf_jamming"], 0.25)
-        self.assertEqual(snap["gcs_radio_range"], 120.0)
+        self.assertEqual(snap["gcs_radio_range"], 140.0)
+        self.assertIn("rf_link_budget", snap)
+        self.assertEqual(snap["rf_link_budget"]["howl_gcs_uplink"], 140.0)
+        self.assertEqual(snap["rf_link_budget"]["bark_leader_downlink"], 90.0)
+        self.assertEqual(snap["rf_link_budget"]["yip_escort_downlink"], 50.0)
+        self.assertEqual(snap["rf_link_budget"]["p2p_mesh"], 60.0)
 
         # Check drone serialized RSSI
         d0 = snap["drones"][0]
         self.assertIn("rssi", d0)
         self.assertIn("link_quality", d0)
+        self.assertIn("uplink_active", d0)
+        self.assertIn("downlink_active", d0)
+        self.assertIn("yip_lost", d0)
+        self.assertIn("gateway_id", d0)
+        self.assertIsInstance(d0["rssi"], (int, float))
+        self.assertIsInstance(d0["link_quality"], (int, float))
         self.assertIsInstance(d0["rssi"], (int, float))
         self.assertIsInstance(d0["link_quality"], (int, float))
 
@@ -230,6 +251,129 @@ class TestTriModeRF(unittest.TestCase):
         res = mav_bridge.execute_command({"cmd": "SET_TARGET", "pos": [200.0, 50.0, 30.0]})
         self.assertEqual(res["status"], "OUT_OF_RANGE")
         mav_bridge.close()
+
+    def test_canine_rf_constants(self):
+        """Verify Canine Acoustic Taxonomy constants (TKT-49)."""
+        self.assertEqual(RANGE_HOWL, 140.0)
+        self.assertEqual(RANGE_BARK, 90.0)
+        self.assertEqual(RANGE_YIP, 50.0)
+        self.assertEqual(RANGE_P2P, 60.0)
+        self.assertEqual(RADIO_RANGE, 140.0)
+
+    def test_asymmetric_link_budget_yip_back_state(self):
+        """Verify 'Yip-Back' state: Escort between 50m (Yip) and 140m (Howl) hears GCS
+        commands (uplink_active = True), but GCS cannot hear telemetry directly (downlink_active = False, yip_lost = True)."""
+        self.sim.set_comms_mode("GOSSIP_CONSENSUS")
+
+        # Place escort Drone 1 at 75m from Base (alone, no peers within 60m)
+        escort = self.sim.drones[1]
+        escort.tier = TIER_ESCORT
+        escort.is_leader = False
+        escort.pos = np.array([75.0, 0.0, 20.0], dtype=float)
+
+        # Place all other drones far away (> 160m)
+        for d in self.sim.drones:
+            if d.id != escort.id:
+                d.pos = np.array([200.0, d.id * 10.0, 25.0], dtype=float)
+
+        self.sim.step(0.016)
+
+        # Escort at 75m: receives Howl (75m <= 140m), but cannot Yip back (75m > 50m)
+        self.assertTrue(escort.uplink_active, "75m is within 140m GCS Howl uplink range")
+        self.assertFalse(escort.downlink_active, "75m exceeds 50m Tier-2 Yip downlink range")
+        self.assertTrue(escort.yip_lost, "Drone must be in Yip-Lost state when uplink_active and not downlink_active")
+        self.assertIsNone(escort.gateway_id, "No mesh gateway proxy available")
+
+    def test_tier1_bark_downlink(self):
+        """Verify Tier-1 Flagship / Leader has 90m Bark downlink range."""
+        self.sim.set_comms_mode("LEADER_FOLLOWER")
+        leader = self.sim.leader
+        self.assertIsNotNone(leader)
+
+        # 1. At 75m: Leader hears Howl (75 <= 140) and GCS hears Bark (75 <= 90)
+        leader.pos = np.array([75.0, 0.0, 20.0], dtype=float)
+        self.sim.step(0.016)
+
+        self.assertTrue(leader.uplink_active)
+        self.assertTrue(leader.downlink_active)
+        self.assertFalse(leader.yip_lost)
+
+        # 2. At 110m: Leader hears Howl (110 <= 140), but GCS cannot hear Bark (110 > 90)
+        leader.pos = np.array([110.0, 0.0, 20.0], dtype=float)
+        self.sim.step(0.016)
+
+        self.assertTrue(leader.uplink_active)
+        self.assertFalse(leader.downlink_active)
+        self.assertTrue(leader.yip_lost)
+
+    def test_mesh_telemetry_gateway_multi_hop_relay(self):
+        """Verify Mesh Telemetry Gateway in Gossip Consensus:
+        - Drone 0 at 40m acts as Gateway (d <= 50m Yip).
+        - Drone 1 at 85m is relayed via Drone 0 (distance = 45m <= 60m P2P).
+        - Drone 2 at 130m is multi-hop relayed via Drone 1 (distance = 45m <= 60m P2P)."""
+        self.sim.set_comms_mode("GOSSIP_CONSENSUS")
+
+        d0 = self.sim.drones[0]
+        d1 = self.sim.drones[1]
+        d2 = self.sim.drones[2]
+
+        # Move rest far away
+        for d in self.sim.drones[3:]:
+            d.pos = np.array([250.0, d.id * 10.0, 25.0], dtype=float)
+
+        # Topology: Base (0) --- 40m ---> D0 (40m) --- 45m ---> D1 (85m) --- 45m ---> D2 (130m)
+        d0.pos = np.array([40.0, 0.0, 20.0], dtype=float)
+        d1.pos = np.array([85.0, 0.0, 20.0], dtype=float)
+        d2.pos = np.array([130.0, 0.0, 20.0], dtype=float)
+
+        self.sim.step(0.016)
+
+        # D0: Direct gateway
+        self.assertTrue(d0.uplink_active)
+        self.assertTrue(d0.downlink_active)
+        self.assertFalse(d0.yip_lost)
+        self.assertEqual(d0.gateway_id, d0.id)
+
+        # D1: Relayed through D0
+        self.assertTrue(d1.uplink_active)
+        self.assertTrue(d1.downlink_active, "D1 must have downlink_active via D0 gateway")
+        self.assertFalse(d1.yip_lost, "D1 is not in yip_lost because telemetry is relayed")
+        self.assertEqual(d1.gateway_id, d0.id)
+
+        # D2: Multi-hop relayed through mesh
+        self.assertTrue(d2.uplink_active)
+        self.assertTrue(d2.downlink_active, "D2 must have downlink_active via multi-hop mesh")
+        self.assertFalse(d2.yip_lost)
+        self.assertEqual(d2.gateway_id, d0.id)
+
+    def test_mesh_telemetry_gateway_severance_on_proxy_loss(self):
+        """When all drones move beyond direct downlink range (Bark 90m for leader, Yip 50m for escort),
+        all connected peers transition to Yip-Lost if they still hear GCS Howl (<= 140m)."""
+        self.sim.set_comms_mode("GOSSIP_CONSENSUS")
+
+        d0 = self.sim.drones[0]
+        d1 = self.sim.drones[1]
+
+        # Move rest far away
+        for d in self.sim.drones[2:]:
+            d.pos = np.array([250.0, d.id * 10.0, 25.0], dtype=float)
+
+        # D0 (leader with 90m Bark) moves to 100m (> 90m Bark). D1 moves to 125m (> 50m Yip).
+        # Distance between D0 and D1 is 25m (<= 60m P2P mesh).
+        d0.pos = np.array([100.0, 0.0, 20.0], dtype=float)
+        d1.pos = np.array([125.0, 0.0, 20.0], dtype=float)
+
+        self.sim.step(0.016)
+
+        # Neither has direct downlink to Base
+        self.assertFalse(d0.downlink_active, "100m exceeds D0's 90m Tier-1 Bark downlink range")
+        self.assertFalse(d1.downlink_active, "125m exceeds D1's 50m Tier-2 Yip downlink range")
+
+        # Both hear GCS Howl (<= 140m), so both enter Yip-Lost!
+        self.assertTrue(d0.uplink_active)
+        self.assertTrue(d1.uplink_active)
+        self.assertTrue(d0.yip_lost)
+        self.assertTrue(d1.yip_lost)
 
 
 if __name__ == "__main__":

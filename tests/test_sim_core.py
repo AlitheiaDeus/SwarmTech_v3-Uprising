@@ -523,12 +523,12 @@ class TestSimCore(unittest.TestCase):
                 self.assertGreater(d, 1.5, "No prop clashes permitted during post-severance loiter!")
 
     def test_uplink_mailbox_radio_range_gating(self):
-        """In LEADER_FOLLOWER, target uplink packets are dropped if leader exceeds 120m radio range (TKT-25)."""
+        """In LEADER_FOLLOWER, target uplink packets are dropped if leader exceeds 140m GCS Howl range (TKT-25/49)."""
         sim = SwarmSimulator(drone_count=6)
         sim.set_comms_mode("LEADER_FOLLOWER")
 
-        # Move leader beyond 120m GCS radio range
-        sim.leader.pos = np.array([130.0, 0.0, 25.0], dtype=float)
+        # Move leader beyond 140m GCS radio range
+        sim.leader.pos = np.array([150.0, 0.0, 25.0], dtype=float)
         initial_ack = np.copy(sim.leader.acknowledged_target)
 
         # Attempt uplink dispatch

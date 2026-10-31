@@ -61,63 +61,12 @@ class LeaderFollowerBrain(BaseBrain):
                 self.assigned_slots[old_leader.id] = vacated_slot
 
     # ==========================================================================
-    # 1. Radio Comms (10 Hz Star Broadcast) & LKP Failsafe
+    # 1. Radio Comms & Link Budget Handling
     # ==========================================================================
     def update_comms(self, dt: float) -> None:
-        current_leader = self.sim.leader
-
-        broadcast_tick = False
-        if self.sim.sim_time - self.last_heartbeat_broadcast >= HEARTBEAT_INTERVAL:
-            self.last_heartbeat_broadcast = self.sim.sim_time
-            broadcast_tick = True
-
-        for drone in self.sim.drones:
-            if drone.crashed:
-                continue
-
-            if drone.is_leader:
-                if self.sim.comms_mode == "TETHERED_RELAY":
-                    drone.rssi, drone.link_quality = self.sim.calculate_rssi(0.0, is_hardline=True)
-                    drone.lost_link = False
-                    drone.last_heartbeat_time = self.sim.sim_time
-                else:
-                    # Wireless Star: Leader communicates with GCS base anchor
-                    d_gcs = float(np.linalg.norm(drone.pos - self.sim.tether_anchor))
-                    drone.rssi, drone.link_quality = self.sim.calculate_rssi(d_gcs, is_hardline=False)
-                    if broadcast_tick:
-                        dropped = self.sim.is_packet_dropped(d_gcs, is_hardline=False)
-                        in_range = d_gcs <= RADIO_RANGE
-                        if in_range and not dropped:
-                            drone.last_heartbeat_time = self.sim.sim_time
-                            drone.lost_link = False
-                            drone.lkp = np.copy(drone.pos)
-                            if drone.status == "LOST_LINK":
-                                drone.status = "FLEET_LEADER"
-                    if self.sim.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
-                        drone.lost_link = True
-                        drone.status = "LOST_LINK"
-                continue
-
-            if current_leader is not None:
-                dist = float(np.linalg.norm(drone.pos - current_leader.pos))
-                drone.rssi, drone.link_quality = self.sim.calculate_rssi(dist, is_hardline=False)
-
-                if broadcast_tick:
-                    in_range = dist <= RADIO_RANGE
-                    dropped = self.sim.is_packet_dropped(dist, is_hardline=False)
-
-                    if in_range and not dropped:
-                        drone.lkp = np.copy(current_leader.pos)
-                        drone.last_heartbeat_time = self.sim.sim_time
-                        drone.lost_link = False
-                        if drone.status == "LOST_LINK":
-                            drone.status = "ACTIVE"
-            else:
-                drone.rssi, drone.link_quality = -115.0, 0.0
-
-            if self.sim.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
-                drone.lost_link = True
-                drone.status = "LOST_LINK"
+        """Physical RF propagation, asymmetric link budget & gateway relays are
+        maintained by SITL World Engine _update_radio_comms() across all modes (TKT-49)."""
+        pass
 
     # ==========================================================================
     # 2. Guidance Target Computation

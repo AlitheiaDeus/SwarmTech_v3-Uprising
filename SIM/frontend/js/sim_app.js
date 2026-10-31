@@ -23,7 +23,9 @@
         ghostNormal: 0xFF00EA,
         ghostWarn: 0xFFB800,
         ghostClash: 0xFF2A55,
-        rfDome: 0x9D00FF,
+        rfDomeHowl: 0x00F0FF,
+        rfDomeBark: 0xFFB800,
+        rfDomeYip: 0x0088FF,
         target: 0x00FFAA,
         cmdTarget: 0x00F0FF,
     };
@@ -104,12 +106,13 @@
         gridHelper.position.z = 0;
         scene.add(gridHelper);
 
-        // Range Rings (25m, 50m, 100m, 120m)
+        // Range Rings (Canine Acoustic Taxonomy: 50m Yip, 60m P2P, 90m Bark, 140m Howl)
         const rings = [
-            { r: 25, color: COLORS.ring25, op: 0.3 },
-            { r: 50, color: COLORS.ring50, op: 0.3 },
-            { r: 100, color: COLORS.ring100, op: 0.4 },
-            { r: 120, color: COLORS.ring120, op: 0.7, dash: true },
+            { r: 25, color: 0x3d1059, op: 0.3 },
+            { r: 50, color: COLORS.rfDomeYip, op: 0.6 },    // 50m Yip Escort Downlink
+            { r: 60, color: 0x00FFAA, op: 0.4 },            // 60m P2P Mesh limit
+            { r: 90, color: COLORS.rfDomeBark, op: 0.7 },   // 90m Bark Flagship Downlink
+            { r: 140, color: COLORS.rfDomeHowl, op: 0.85, dash: true }, // 140m Howl GCS Uplink
         ];
 
         rings.forEach(({ r, color, op, dash }) => {
@@ -154,17 +157,46 @@
     }
 
     function setupRfHorizonDome() {
-        // 120m Radio Range Geodesic Wireframe Dome (firmly anchored on ground plane Z=0)
-        const domeGeom = new THREE.SphereGeometry(120, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
-        domeGeom.rotateX(Math.PI / 2);
-        const domeMat = new THREE.MeshBasicMaterial({
-            color: COLORS.rfDome,
+        const domeGroup = new THREE.Group();
+        domeGroup.name = "rf_canine_domes";
+
+        // 1. 140m GCS Howl Uplink Wireframe Dome (Outer Cyan)
+        const howlGeom = new THREE.SphereGeometry(140, 32, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+        howlGeom.rotateX(Math.PI / 2);
+        const howlMat = new THREE.MeshBasicMaterial({
+            color: COLORS.rfDomeHowl,
             wireframe: true,
             transparent: true,
-            opacity: 0.12,
+            opacity: 0.10,
         });
-        rfDome = new THREE.Mesh(domeGeom, domeMat);
-        scene.add(rfDome);
+        const howlDome = new THREE.Mesh(howlGeom, howlMat);
+        domeGroup.add(howlDome);
+
+        // 2. 90m Flagship Bark Downlink Wireframe Dome (Mid Amber)
+        const barkGeom = new THREE.SphereGeometry(90, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+        barkGeom.rotateX(Math.PI / 2);
+        const barkMat = new THREE.MeshBasicMaterial({
+            color: COLORS.rfDomeBark,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.08,
+        });
+        const barkDome = new THREE.Mesh(barkGeom, barkMat);
+        domeGroup.add(barkDome);
+
+        // 3. 50m Escort Yip Downlink Wireframe Dome (Inner Blue)
+        const yipGeom = new THREE.SphereGeometry(50, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2);
+        yipGeom.rotateX(Math.PI / 2);
+        const yipMat = new THREE.MeshBasicMaterial({
+            color: COLORS.rfDomeYip,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.08,
+        });
+        const yipDome = new THREE.Mesh(yipGeom, yipMat);
+        domeGroup.add(yipDome);
+
+        scene.add(domeGroup);
     }
 
     function setupTargetBeacons() {

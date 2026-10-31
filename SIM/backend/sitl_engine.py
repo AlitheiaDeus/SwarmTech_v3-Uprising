@@ -58,8 +58,12 @@ V_LKP: float = 8.0                     # Conservative speed when navigating to L
 A_MAX: float = 15.0                    # Maximum acceleration (m/s^2)
 GRAVITY: float = -9.81                 # Ballistic drop acceleration (m/s^2)
 
-# Radio Comms & LKP
-RADIO_RANGE: float = 120.0             # Radio broadcast range limit (m)
+# Radio Comms & Asymmetric Link Budget (Canine Acoustic Taxonomy - TKT-49)
+RANGE_HOWL: float = 140.0              # High-power GCS mast TX (blasting uplink) (m)
+RANGE_BARK: float = 90.0               # Tier-1 Flagship onboard TX (leader downlink) (m)
+RANGE_YIP: float = 50.0                # Tier-2 Escort micro-transceiver (escort downlink) (m)
+RANGE_P2P: float = 60.0                # Inter-drone P2P mesh gossip radio propagation limit (m)
+RADIO_RANGE: float = RANGE_HOWL        # Backward-compatible generic radio horizon alias (m)
 HEARTBEAT_INTERVAL: float = 0.1        # 10 Hz broadcast interval (s)
 LINK_TIMEOUT: float = 1.0              # Lost-link timeout threshold (s)
 
@@ -222,23 +226,28 @@ class SITLWorldEngine:
             self.enable_packet_loss = True
         return self.rf_jamming_rate
 
-    def calculate_packet_drop_prob(self, distance: float, is_hardline: bool = False) -> float:
+    def calculate_packet_drop_prob(
+        self, distance: float, is_hardline: bool = False, max_range: Optional[float] = None
+    ) -> float:
         """Calculate packet loss probability using distance-dependent path loss and jamming.
         P_loss(d) = gamma + (1 - gamma) * 0.25 * (d / R_max)^2"""
         if is_hardline:
             return 0.0
-        if distance > RADIO_RANGE:
+        r_max = max_range if max_range is not None else RADIO_RANGE
+        if distance > r_max:
             return 1.0
         if not self.enable_packet_loss and self.rf_jamming_rate <= 0.0:
             return 0.0
         gamma = self.rf_jamming_rate
-        norm_dist = distance / RADIO_RANGE
+        norm_dist = distance / r_max
         prob = gamma + (1.0 - gamma) * 0.25 * (norm_dist ** 2)
         return float(np.clip(prob, 0.0, 1.0))
 
-    def is_packet_dropped(self, distance: float, is_hardline: bool = False) -> bool:
+    def is_packet_dropped(
+        self, distance: float, is_hardline: bool = False, max_range: Optional[float] = None
+    ) -> bool:
         """Stochastically determine if packet is lost given distance and jamming rate."""
-        p = self.calculate_packet_drop_prob(distance, is_hardline)
+        p = self.calculate_packet_drop_prob(distance, is_hardline, max_range=max_range)
         if p <= 0.0:
             return False
         if p >= 1.0:
@@ -586,7 +595,10 @@ class SITLWorldEngine:
                     if drone.landing_wait_timer <= 0.0:
                         drone.landing_stage = "APPROACH"
 
-        # 1. Comms & Packet Protocol from active Brain Plugin
+        # 1. Update Physical RF Channel, Asymmetric Link Budget & Mesh Gateway (TKT-49)
+        self._update_radio_comms()
+
+        # 2. Comms & Packet Protocol from active Brain Plugin
         self.brain.update_comms(dt)
 
         # 2. Check Tether Dynamics & Severance (Tethered Relay Mode)
@@ -831,11 +843,11 @@ class SITLWorldEngine:
             drone.battery = max(0.0, drone.battery - 0.005 * dt)
 
     # ==========================================================================
-    # 1. Radio Comms (10 Hz Baud) & LKP Model
+    # 1. Radio Comms (10 Hz Baud), Asymmetric Link Budget & Mesh Gateway (TKT-49)
     # ==========================================================================
     def _update_radio_comms(self) -> None:
-        """Simulate realistic 10 Hz radio broadcast packets and timeout-based
-        Lost-Link state transitions."""
+        """Simulate realistic 10 Hz radio broadcast packets, asymmetric link budget (Canine Taxonomy),
+        Mesh Telemetry Gateway relay, and timeout-based Lost-Link state transitions (TKT-49)."""
         current_leader = self.leader
 
         # Check if 10 Hz broadcast timer fired
@@ -844,33 +856,74 @@ class SITLWorldEngine:
             self.last_heartbeat_broadcast = self.sim_time
             broadcast_tick = True
 
+        living = [d for d in self.drones if not d.crashed]
+
+        # Reset crashed drones
+        for d in self.drones:
+            if d.crashed:
+                d.uplink_active = False
+                d.downlink_active = False
+                d.yip_lost = False
+                d.gateway_id = None
+
         if self.comms_mode == "GOSSIP_CONSENSUS":
-            # P2P Gossip Mesh: Drones with direct GCS link or multi-hop connection to GCS
-            living = [d for d in self.drones if not d.crashed]
-            direct_gcs_nodes = set()
+            # 1. Asymmetric Link Budget: Uplink & Direct Downlink
+            # High-power GCS Howl (140m) reaches all drones within 140m (unless jammed/dropped)
+            # Direct Downlink: 90m for Tier-1 Leader (Bark), 50m for Tier-2 Escorts (Yip)
+            direct_gateways: Set[int] = set()
+
             for d in living:
                 d_gcs = float(np.linalg.norm(d.pos - self.tether_anchor))
-                d.rssi, d.link_quality = self.calculate_rssi(d_gcs, is_hardline=False)
-                if d_gcs <= RADIO_RANGE and not self.is_packet_dropped(d_gcs, is_hardline=False):
-                    direct_gcs_nodes.add(d.id)
+                dropped_up = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_HOWL)
+                d.uplink_active = (d_gcs <= RANGE_HOWL and not dropped_up)
 
-            # Connected component flood-fill through mesh
-            connected_to_gcs = set(direct_gcs_nodes)
-            changed = True
-            while changed:
-                changed = False
-                for d in living:
-                    if d.id not in connected_to_gcs:
-                        for active_id in list(connected_to_gcs):
-                            peer = next((p for p in living if p.id == active_id), None)
-                            if peer and float(np.linalg.norm(d.pos - peer.pos)) <= RADIO_RANGE:
-                                connected_to_gcs.add(d.id)
-                                changed = True
-                                break
+                r_down = RANGE_BARK if (d.tier == TIER_LEADER or d.is_leader) else RANGE_YIP
+                dropped_down = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=r_down)
+                has_direct = (d_gcs <= r_down and not dropped_down)
 
+                if has_direct:
+                    d.downlink_active = True
+                    d.gateway_id = d.id  # Acting as its own direct gateway
+                    direct_gateways.add(d.id)
+                else:
+                    d.downlink_active = False
+                    d.gateway_id = None
+
+            # 2. Mesh Telemetry Gateway (The Relay Proxy)
+            # Flood-fill from direct gateways over RANGE_P2P (60.0m) inter-drone mesh hops
+            queue = [(gw_id, gw_id) for gw_id in direct_gateways]
+            visited = set(direct_gateways)
+
+            while queue:
+                curr_id, root_gw = queue.pop(0)
+                curr_drone = next((d for d in living if d.id == curr_id), None)
+                if curr_drone is None:
+                    continue
+
+                for peer in living:
+                    if peer.id not in visited:
+                        d_peer = float(np.linalg.norm(peer.pos - curr_drone.pos))
+                        dropped_peer = self.is_packet_dropped(d_peer, is_hardline=False, max_range=RANGE_P2P)
+                        if d_peer <= RANGE_P2P and not dropped_peer:
+                            peer.downlink_active = True
+                            peer.gateway_id = root_gw
+                            visited.add(peer.id)
+                            queue.append((peer.id, root_gw))
+
+            # 3. Yip-Lost State & Heartbeat / RSSI
             for d in living:
+                # "Yip-Back" State: hears GCS commands (Howl) but cannot transmit telemetry back
+                d.yip_lost = bool(d.uplink_active and not d.downlink_active)
+
+                # RSSI: calculated against nearest active peer or GCS anchor
+                min_dist = float(np.linalg.norm(d.pos - self.tether_anchor))
+                for peer in living:
+                    if peer.id != d.id:
+                        min_dist = min(min_dist, float(np.linalg.norm(d.pos - peer.pos)))
+                d.rssi, d.link_quality = self.calculate_rssi(min_dist, is_hardline=False)
+
                 if broadcast_tick:
-                    if d.id in connected_to_gcs:
+                    if d.downlink_active or d.uplink_active:
                         d.last_heartbeat_time = self.sim_time
                         d.lost_link = False
                         d.lkp = np.copy(d.pos)
@@ -881,55 +934,128 @@ class SITLWorldEngine:
                     d.status = "LOST_LINK"
             return
 
-        for drone in self.drones:
-            if drone.crashed:
-                continue
-
-            if drone.is_leader:
-                if self.comms_mode == "TETHERED_RELAY":
-                    drone.rssi, drone.link_quality = self.calculate_rssi(0.0, is_hardline=True)
-                    drone.lost_link = False
-                    drone.last_heartbeat_time = self.sim_time
-                else:
-                    # Wireless Star: Leader communicates with GCS base
-                    d_gcs = float(np.linalg.norm(drone.pos - self.tether_anchor))
-                    drone.rssi, drone.link_quality = self.calculate_rssi(d_gcs, is_hardline=False)
-                    if broadcast_tick:
-                        dropped = self.is_packet_dropped(d_gcs, is_hardline=False)
-                        in_range = d_gcs <= RADIO_RANGE
-                        if in_range and not dropped:
+        elif self.comms_mode == "TETHERED_RELAY":
+            # Primary leader on hardline umbilical
+            for drone in living:
+                if drone.id == 0 or drone.is_leader:
+                    if not self.tether_severed:
+                        drone.rssi, drone.link_quality = self.calculate_rssi(0.0, is_hardline=True)
+                        drone.uplink_active = True
+                        drone.downlink_active = True
+                        drone.yip_lost = False
+                        drone.gateway_id = None
+                        drone.lost_link = False
+                        drone.last_heartbeat_time = self.sim_time
+                        if drone.status == "LOST_LINK":
+                            drone.status = "FLEET_LEADER"
+                    else:
+                        d_gcs = float(np.linalg.norm(drone.pos - self.tether_anchor))
+                        drone.rssi, drone.link_quality = self.calculate_rssi(d_gcs, is_hardline=False)
+                        dropped_up = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_HOWL)
+                        dropped_down = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_BARK)
+                        drone.uplink_active = (d_gcs <= RANGE_HOWL and not dropped_up)
+                        drone.downlink_active = (d_gcs <= RANGE_BARK and not dropped_down)
+                        drone.yip_lost = bool(drone.uplink_active and not drone.downlink_active)
+                        drone.gateway_id = None
+                        if broadcast_tick and drone.uplink_active:
                             drone.last_heartbeat_time = self.sim_time
                             drone.lost_link = False
                             drone.lkp = np.copy(drone.pos)
                             if drone.status == "LOST_LINK":
                                 drone.status = "FLEET_LEADER"
+                        if self.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
+                            drone.lost_link = True
+                            drone.status = "LOST_LINK"
+                else:
+                    # Escort in Tethered Relay
+                    d_gcs = float(np.linalg.norm(drone.pos - self.tether_anchor))
+                    dropped_up = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_HOWL)
+                    drone.uplink_active = (d_gcs <= RANGE_HOWL and not dropped_up)
+
+                    dist_to_leader = float(np.linalg.norm(drone.pos - current_leader.pos)) if current_leader else 999.0
+                    drone.rssi, drone.link_quality = self.calculate_rssi(min(d_gcs, dist_to_leader), is_hardline=False)
+
+                    dropped_lead = self.is_packet_dropped(dist_to_leader, is_hardline=False, max_range=RANGE_YIP)
+                    if d_gcs <= RANGE_YIP and not self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_YIP):
+                        drone.downlink_active = True
+                        drone.gateway_id = None
+                    elif current_leader and current_leader.downlink_active and dist_to_leader <= RANGE_YIP and not dropped_lead:
+                        drone.downlink_active = True
+                        drone.gateway_id = current_leader.id
+                    else:
+                        drone.downlink_active = False
+                        drone.gateway_id = None
+
+                    drone.yip_lost = bool(drone.uplink_active and not drone.downlink_active)
+
+                    if broadcast_tick:
+                        in_range_lead = (dist_to_leader <= RANGE_BARK and not self.is_packet_dropped(dist_to_leader, is_hardline=False, max_range=RANGE_BARK))
+                        if current_leader and not current_leader.lost_link and in_range_lead:
+                            drone.lkp = np.copy(current_leader.pos)
+                            drone.last_heartbeat_time = self.sim_time
+                            drone.lost_link = False
+                            if drone.status == "LOST_LINK":
+                                drone.status = "ACTIVE"
                     if self.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
                         drone.lost_link = True
                         drone.status = "LOST_LINK"
-                continue
+            return
 
-            # Follower receiving leader heartbeat
-            if current_leader is not None:
-                dist_to_leader = float(np.linalg.norm(drone.pos - current_leader.pos))
-                drone.rssi, drone.link_quality = self.calculate_rssi(dist_to_leader, is_hardline=False)
+        elif self.comms_mode == "LEADER_FOLLOWER":
+            # Wireless Star
+            for drone in living:
+                if drone.is_leader:
+                    d_gcs = float(np.linalg.norm(drone.pos - self.tether_anchor))
+                    drone.rssi, drone.link_quality = self.calculate_rssi(d_gcs, is_hardline=False)
+                    dropped_up = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_HOWL)
+                    dropped_down = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_BARK)
+                    drone.uplink_active = (d_gcs <= RANGE_HOWL and not dropped_up)
+                    drone.downlink_active = (d_gcs <= RANGE_BARK and not dropped_down)
+                    drone.yip_lost = bool(drone.uplink_active and not drone.downlink_active)
+                    drone.gateway_id = None
 
-                if broadcast_tick:
-                    in_range = dist_to_leader <= RADIO_RANGE
-                    packet_dropped = self.is_packet_dropped(dist_to_leader, is_hardline=False)
-
-                    if in_range and not packet_dropped and not getattr(current_leader, "lost_link", False):
-                        drone.lkp = np.copy(current_leader.pos)
+                    if broadcast_tick and drone.uplink_active:
                         drone.last_heartbeat_time = self.sim_time
                         drone.lost_link = False
+                        drone.lkp = np.copy(drone.pos)
                         if drone.status == "LOST_LINK":
-                            drone.status = "ACTIVE"
-            else:
-                drone.rssi, drone.link_quality = -115.0, 0.0
+                            drone.status = "FLEET_LEADER"
+                    if self.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
+                        drone.lost_link = True
+                        drone.status = "LOST_LINK"
+                else:
+                    d_gcs = float(np.linalg.norm(drone.pos - self.tether_anchor))
+                    dropped_up = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_HOWL)
+                    drone.uplink_active = (d_gcs <= RANGE_HOWL and not dropped_up)
 
-            # Check lost-link timeout (1.0 second threshold)
-            if self.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
-                drone.lost_link = True
-                drone.status = "LOST_LINK"
+                    dist_to_leader = float(np.linalg.norm(drone.pos - current_leader.pos)) if current_leader else 999.0
+                    drone.rssi, drone.link_quality = self.calculate_rssi(min(d_gcs, dist_to_leader), is_hardline=False)
+
+                    dropped_lead = self.is_packet_dropped(dist_to_leader, is_hardline=False, max_range=RANGE_YIP)
+                    if d_gcs <= RANGE_YIP and not self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_YIP):
+                        drone.downlink_active = True
+                        drone.gateway_id = None
+                    elif current_leader and current_leader.downlink_active and dist_to_leader <= RANGE_YIP and not dropped_lead:
+                        drone.downlink_active = True
+                        drone.gateway_id = current_leader.id
+                    else:
+                        drone.downlink_active = False
+                        drone.gateway_id = None
+
+                    drone.yip_lost = bool(drone.uplink_active and not drone.downlink_active)
+
+                    if broadcast_tick:
+                        in_range_lead = (dist_to_leader <= RANGE_BARK and not self.is_packet_dropped(dist_to_leader, is_hardline=False, max_range=RANGE_BARK))
+                        if current_leader and not current_leader.lost_link and in_range_lead:
+                            drone.lkp = np.copy(current_leader.pos)
+                            drone.last_heartbeat_time = self.sim_time
+                            drone.lost_link = False
+                            if drone.status == "LOST_LINK":
+                                drone.status = "ACTIVE"
+                    if self.sim_time - drone.last_heartbeat_time > LINK_TIMEOUT:
+                        drone.lost_link = True
+                        drone.status = "LOST_LINK"
+            return
 
     # ==========================================================================
     # 2. Tether Avoidance & Severance Dynamics
@@ -1784,6 +1910,12 @@ class SITLWorldEngine:
             "brain": self.active_brain_name,
             "comms_mode": self.comms_mode,
             "rf_jamming": round(float(self.rf_jamming_rate), 2),
+            "rf_link_budget": {
+                "howl_gcs_uplink": RANGE_HOWL,
+                "bark_leader_downlink": RANGE_BARK,
+                "yip_escort_downlink": RANGE_YIP,
+                "p2p_mesh": RANGE_P2P,
+            },
             "gcs_radio_range": RADIO_RANGE,
             "formation": getattr(self.brain, "formation_mode", self.formation_mode),
             "target": [round(float(v), 2) for v in self.target_pos],
@@ -1836,6 +1968,10 @@ __all__ = [
     "V_LKP",
     "A_MAX",
     "GRAVITY",
+    "RANGE_HOWL",
+    "RANGE_BARK",
+    "RANGE_YIP",
+    "RANGE_P2P",
     "RADIO_RANGE",
     "HEARTBEAT_INTERVAL",
     "LINK_TIMEOUT",
