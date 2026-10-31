@@ -552,3 +552,9 @@ class C2Gateway:
             "action": "RNG_RECON_STOPPED",
             "station_count": self.rng_station_count,
         }
+
+    def clear_pads(self, turnaround_rearm: bool = False) -> Dict[str, Any]:
+        """Operator action: reset/clear recovery pads and release the next wave of holding drones (TKT-42)."""
+        if self.sim and hasattr(self.sim, "clear_pads"):
+            return self.sim.clear_pads(turnaround_rearm=turnaround_rearm)
+        return {"status": "ERROR", "reason": "No simulation engine attached"}

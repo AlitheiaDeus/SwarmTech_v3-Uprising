@@ -87,7 +87,9 @@ class Drone:
         self.landing_pad_idx: Optional[int] = None
         self.landing_pad: Optional[np.ndarray] = None
         self.landing_wait_timer: float = 0.0
-        self.landing_stage: str = "NONE"  # "NONE", "WAITING_CLEARANCE", "APPROACH", "FINAL_DESCENT", "LANDED"
+        self.landing_stage: str = "NONE"  # "NONE", "WAITING_CLEARANCE", "APPROACH", "FINAL_DESCENT", "LANDED", "TOUCHDOWN_CONFIRMED"
+        self.touchdown_confirmed: bool = False
+        self.gated_by_drone_id: Optional[int] = None
 
         # Onboard Target Buffer (TKT-25: Ground Truth vs Autopilot Decoupling)
         self.acknowledged_target: np.ndarray = (
@@ -155,6 +157,8 @@ class Drone:
         self.landing_pad = None
         self.landing_wait_timer = 0.0
         self.landing_stage = "NONE"
+        self.touchdown_confirmed = False
+        self.gated_by_drone_id = None
         self.acknowledged_target = np.array(pos, dtype=float)
         self.target_station = None
         self.mission_waypoints = []
@@ -213,6 +217,8 @@ class Drone:
             "tether_failsafe_policy": self.tether_failsafe_policy,
             "landing_pad_idx": self.landing_pad_idx,
             "landing_stage": self.landing_stage,
+            "touchdown_confirmed": self.touchdown_confirmed,
+            "gated_by_drone_id": self.gated_by_drone_id,
             "acknowledged_target": [round(float(v), 2) for v in self.acknowledged_target],
             "mission_active": self.mission_active,
             "current_wp_idx": self.current_wp_idx,

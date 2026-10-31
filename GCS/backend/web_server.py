@@ -410,6 +410,23 @@ class SwarmWebServer:
                 "count": len(queued),
             }
 
+        elif cmd in ("CLEAR_PADS", "CLEAR_PADS_NEXT_WAVE", "NEXT_WAVE", "CLEAR_PADS_RELEASE"):
+            rearm = bool(cmd_dict.get("rearm", False))
+            res = self.sim.clear_pads(turnaround_rearm=rearm)
+            self.session_manager.add_event(
+                "ATC",
+                f"ATC Pads cleared // Next wave released: {res.get('released', 0)} drone(s)",
+                sim_time=self.sim.sim_time,
+            )
+            return {
+                "status": "OK",
+                "cmd": cmd,
+                "cleared_pads": res.get("cleared_pads", 0),
+                "released": res.get("released", 0),
+                "released_drone_ids": res.get("released_drone_ids", []),
+                "current_wave": res.get("current_wave", 1),
+            }
+
         elif cmd in ("LAND_DRONE", "COMMAND_LAND_DRONE"):
             drone_id = int(cmd_dict.get("id", cmd_dict.get("drone_id", 0)))
             success = self.sim.command_land_drone(drone_id)

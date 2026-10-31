@@ -135,6 +135,11 @@
             window.swarmClient?.send({ cmd: 'LAND_SWARM' });
         });
 
+        setupBtn('btn-clear-pads', () => {
+            logEvent('CMD', 'ATC Manual Override: Clearing occupied pads & releasing next wave from overhead marshal');
+            window.swarmClient?.send({ cmd: 'CLEAR_PADS' });
+        });
+
         setupBtn('btn-cancel-rtb', () => {
             logEvent('CMD', 'Cancelling recovery: Resuming normal swarm cruise');
             window.swarmClient?.send({ cmd: 'CANCEL_RTB' });
@@ -520,6 +525,23 @@
                 btnCancelRtb.style.display = 'block';
             } else {
                 btnCancelRtb.style.display = 'none';
+            }
+        }
+
+        const btnClearPads = document.getElementById('btn-clear-pads');
+        if (btnClearPads) {
+            if (frame.atc && (frame.atc.waiting_marshal_count > 0 || frame.atc.turnaround_timer > 0)) {
+                btnClearPads.style.display = 'block';
+                if (frame.atc.turnaround_timer > 0) {
+                    btnClearPads.textContent = `CLEAR PADS // NEXT WAVE (${frame.atc.turnaround_timer}s)`;
+                } else {
+                    btnClearPads.textContent = `CLEAR PADS // NEXT WAVE (${frame.atc.waiting_marshal_count} WAITING)`;
+                }
+            } else if (frame.landing_pads && Object.keys(frame.landing_pads).length > 0) {
+                btnClearPads.style.display = 'block';
+                btnClearPads.textContent = 'CLEAR PADS // NEXT WAVE';
+            } else {
+                btnClearPads.style.display = 'none';
             }
         }
 

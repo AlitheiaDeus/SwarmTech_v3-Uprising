@@ -167,6 +167,13 @@ class SITLWorldEngine:
         self.recovery_stage: str = "IDLE"  # "IDLE", "OVERHEAD_MARSHAL", "LANDING"
         self.landing_pads: Dict[int, int] = {}  # pad_idx -> drone_id
 
+        # Batched ATC Pad Recovery & Downwash Clearance Cycles (TKT-42)
+        self.atc_capacity: int = 8                # Bounded to 8 numbered recovery pads (0..7)
+        self.atc_current_wave: int = 1            # Current landing batch wave (1, 2, ...)
+        self.atc_waiting_queue: List[int] = []    # Drone IDs holding in overhead marshal shelves
+        self.turnaround_timer: float = 0.0        # Turnaround countdown timer (12.0s)
+        self.auto_turnaround_enabled: bool = True # Automatically release next wave on turnaround timeout
+
         # Build Drone Fleet
         self.drones: List[Drone] = []
         self._highest_drone_id: int = drone_count - 1
@@ -279,6 +286,29 @@ class SITLWorldEngine:
         lq = max(0.0, min(1.0, (rssi - (-100.0)) / 60.0)) * (1.0 - self.rf_jamming_rate)
         return round(rssi, 1), round(float(lq), 2)
 
+    def is_within_base_rf_dome(self, pos_or_dist: Union[float, List[float], np.ndarray]) -> bool:
+        """Check whether position or scalar distance is within 50m High-Gain RF Dome (TKT-42)."""
+        if isinstance(pos_or_dist, (int, float)):
+            return float(pos_or_dist) <= 50.0
+        pos_arr = np.array(pos_or_dist, dtype=float)
+        return float(np.linalg.norm(pos_arr - self.tether_anchor)) <= 50.0
+
+    def calculate_base_rf_link(self, pos_or_dist: Union[float, List[float], np.ndarray]) -> Tuple[float, float, float]:
+        """Compute (drop_prob, rssi, link_quality) incorporating 50m Base Horizon High-Gain RF Dome (TKT-42).
+        Within 50m radius of base anchor, high-gain base station radio guarantees 100% link quality."""
+        d = float(pos_or_dist) if isinstance(pos_or_dist, (int, float)) else float(np.linalg.norm(np.array(pos_or_dist, dtype=float) - self.tether_anchor))
+        if d <= 50.0:
+            return 0.0, -35.0, 1.0
+        rssi, lq = self.calculate_rssi(d)
+        drop_p = self.calculate_packet_drop_prob(d)
+        return drop_p, rssi, lq
+        loss = 20.0 * math.log10(d)
+        jamming_penalty = 40.0 * self.rf_jamming_rate
+        rssi = -40.0 - loss - jamming_penalty
+        rssi = float(np.clip(rssi, -115.0, -35.0))
+        lq = max(0.0, min(1.0, (rssi - (-100.0)) / 60.0)) * (1.0 - self.rf_jamming_rate)
+        return round(rssi, 1), round(float(lq), 2)
+
     def _init_fleet(self, count: int, cold_start: Optional[bool] = None) -> None:
         """Initialize leader and followers in safe starting formation or cold pads."""
         if cold_start is None:
@@ -290,6 +320,9 @@ class SITLWorldEngine:
         self.overhead_marshal_active = False
         self.recovery_stage = "IDLE"
         self.landing_pads.clear()
+        self.atc_current_wave = 1
+        self.atc_waiting_queue.clear()
+        self.turnaround_timer = 0.0
         self.scramble_active = False
         self.scramble_timer = 0.0
         self._highest_drone_id = count - 1
@@ -580,6 +613,13 @@ class SITLWorldEngine:
                 return drone
         return None
 
+    def get_drone_by_id(self, drone_id: int) -> Optional[Drone]:
+        """Retrieve drone instance by vehicle ID."""
+        for d in self.drones:
+            if d.id == drone_id:
+                return d
+        return None
+
     def get_2ic(self) -> Optional[Drone]:
         """Dynamically determine the Second-in-Command (2IC) drone (TKT-16).
         Highest succession score among surviving, non-leader escorts:
@@ -655,13 +695,56 @@ class SITLWorldEngine:
                     drone.peel_off_timer = 0.0
                     drone.status = "ACTIVE"
 
-        # 0d. Advance Drone Landing Stagger Clearance Timers (TKT-19)
+        # 0d. Advance Drone Landing Stagger Clearance & Downwash Anti-Vortex Gate (TKT-42)
         for drone in self.drones:
             if not drone.crashed and drone.flight_state == "DESCENDING":
                 if drone.landing_wait_timer > 0.0:
                     drone.landing_wait_timer = max(0.0, drone.landing_wait_timer - dt)
-                    if drone.landing_wait_timer <= 0.0:
+
+                if drone.landing_stage == "WAITING_CLEARANCE":
+                    # Check Downwash Anti-Vortex Gate:
+                    # Gated until preceding drone confirms touchdown (or crashed / dead)
+                    gate_cleared = True
+                    if getattr(drone, "gated_by_drone_id", None) is not None:
+                        g_drone = self.get_drone_by_id(drone.gated_by_drone_id)
+                        if g_drone and not g_drone.crashed:
+                            is_down = (
+                                g_drone.flight_state in ("LANDED", "GROUND_IDLE")
+                                and getattr(g_drone, "touchdown_confirmed", False)
+                            )
+                            if not is_down:
+                                gate_cleared = False
+
+                    # Only advance to APPROACH if both initial timer and downwash gate are clear
+                    if drone.landing_wait_timer <= 0.0 and gate_cleared:
                         drone.landing_stage = "APPROACH"
+
+        # 0e. Batched ATC Recovery Turnaround Countdown (TKT-42)
+        if getattr(self, "auto_turnaround_enabled", True) and self.recovery_stage == "LANDING":
+            active_landed = True
+            if self.landing_pads:
+                for pad_idx, did in self.landing_pads.items():
+                    d = self.get_drone_by_id(did)
+                    if d and not d.crashed and d.flight_state != "LANDED":
+                        active_landed = False
+                        break
+            else:
+                active_landed = False
+
+            waiting_drones = [
+                d for d in self.drones
+                if not d.crashed and d.flight_state == "OVERHEAD_HOLD"
+            ]
+
+            if active_landed and waiting_drones:
+                if self.turnaround_timer <= 0.0:
+                    self.turnaround_timer = 12.0
+                else:
+                    self.turnaround_timer = max(0.0, self.turnaround_timer - dt)
+                    if self.turnaround_timer <= 0.0:
+                        self.clear_pads()
+            else:
+                self.turnaround_timer = 0.0
 
         # 1. Update Physical RF Channel, Asymmetric Link Budget & Mesh Gateway (TKT-49)
         self._update_radio_comms()
@@ -771,14 +854,14 @@ class SITLWorldEngine:
                 )
                 drone.target_station = pad_pos
 
-                if drone.landing_wait_timer > 0.0:
+                if drone.landing_wait_timer > 0.0 or drone.landing_stage == "WAITING_CLEARANCE":
                     drone.landing_stage = "WAITING_CLEARANCE"
                     # Active horizontal column hold above assigned pad to prevent radial drift/scatter (FIX-08)
                     to_pad_xy = pad_pos[:2] - drone.pos[:2]
                     ax_hold = float(np.clip(2.5 * to_pad_xy[0] - 3.0 * drone.vel[0], -6.0, 6.0))
                     ay_hold = float(np.clip(2.5 * to_pad_xy[1] - 3.0 * drone.vel[1], -6.0, 6.0))
 
-                    # Staggered vertical holding shelves (2.0m spacing per pad) outside tether cylinder
+                    # Staggered vertical holding shelves (2.0m spacing per pad) outside tether cylinder (Z >= 18m)
                     target_hold_z = 22.0 + (drone.landing_pad_idx or 0) * 2.0
                     az_hold = float(np.clip(3.0 * (target_hold_z - drone.pos[2]) - 2.0 * drone.vel[2], -4.0, 4.0))
                     guidance_accs[drone.id] = np.array([ax_hold, ay_hold, az_hold], dtype=float)
@@ -826,7 +909,8 @@ class SITLWorldEngine:
                         drone.acc = np.zeros(3, dtype=float)
                         drone.flight_state = "LANDED"
                         drone.status = "LANDED"
-                        drone.landing_stage = "LANDED"
+                        drone.landing_stage = "TOUCHDOWN_CONFIRMED"
+                        drone.touchdown_confirmed = True
                         drone.rotor_rpm = 0.0
 
                         # Succession if landed drone was fleet leader
@@ -975,6 +1059,17 @@ class SITLWorldEngine:
 
             for d in living:
                 d_gcs = float(np.linalg.norm(d.pos - self.tether_anchor))
+
+                # Base Horizon High-Gain RF Dome (TKT-42):
+                # Within 50m radius of base anchor, high-gain base station radio guarantees 100% link quality
+                if d_gcs <= 50.0:
+                    d.uplink_active = True
+                    d.downlink_active = True
+                    d.yip_lost = False
+                    d.gateway_id = d.id
+                    direct_gateways.add(d.id)
+                    continue
+
                 dropped_up = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_HOWL)
                 d.uplink_active = (d_gcs <= RANGE_HOWL and not dropped_up)
 
@@ -1017,11 +1112,15 @@ class SITLWorldEngine:
                 d.yip_lost = bool(d.uplink_active and not d.downlink_active)
 
                 # RSSI: calculated against nearest active peer or GCS anchor
-                min_dist = float(np.linalg.norm(d.pos - self.tether_anchor))
-                for peer in living:
-                    if peer.id != d.id:
-                        min_dist = min(min_dist, float(np.linalg.norm(d.pos - peer.pos)))
-                d.rssi, d.link_quality = self.calculate_rssi(min_dist, is_hardline=False)
+                d_gcs = float(np.linalg.norm(d.pos - self.tether_anchor))
+                if d_gcs <= 50.0:
+                    d.rssi, d.link_quality = -35.0, 1.0
+                else:
+                    min_dist = d_gcs
+                    for peer in living:
+                        if peer.id != d.id:
+                            min_dist = min(min_dist, float(np.linalg.norm(d.pos - peer.pos)))
+                    d.rssi, d.link_quality = self.calculate_rssi(min_dist, is_hardline=False)
 
                 if broadcast_tick:
                     if d.downlink_active or d.uplink_active:
@@ -1051,11 +1150,16 @@ class SITLWorldEngine:
                             drone.status = "FLEET_LEADER"
                     else:
                         d_gcs = float(np.linalg.norm(drone.pos - self.tether_anchor))
-                        drone.rssi, drone.link_quality = self.calculate_rssi(d_gcs, is_hardline=False)
-                        dropped_up = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_HOWL)
-                        dropped_down = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_BARK)
-                        drone.uplink_active = (d_gcs <= RANGE_HOWL and not dropped_up)
-                        drone.downlink_active = (d_gcs <= RANGE_BARK and not dropped_down)
+                        if d_gcs <= 50.0:
+                            drone.rssi, drone.link_quality = -35.0, 1.0
+                            drone.uplink_active = True
+                            drone.downlink_active = True
+                        else:
+                            drone.rssi, drone.link_quality = self.calculate_rssi(d_gcs, is_hardline=False)
+                            dropped_up = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_HOWL)
+                            dropped_down = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_BARK)
+                            drone.uplink_active = (d_gcs <= RANGE_HOWL and not dropped_up)
+                            drone.downlink_active = (d_gcs <= RANGE_BARK and not dropped_down)
                         drone.yip_lost = bool(drone.uplink_active and not drone.downlink_active)
                         drone.gateway_id = None
                         if broadcast_tick and drone.uplink_active:
@@ -1070,22 +1174,27 @@ class SITLWorldEngine:
                 else:
                     # Escort in Tethered Relay
                     d_gcs = float(np.linalg.norm(drone.pos - self.tether_anchor))
-                    dropped_up = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_HOWL)
-                    drone.uplink_active = (d_gcs <= RANGE_HOWL and not dropped_up)
-
                     dist_to_leader = float(np.linalg.norm(drone.pos - current_leader.pos)) if current_leader else 999.0
-                    drone.rssi, drone.link_quality = self.calculate_rssi(min(d_gcs, dist_to_leader), is_hardline=False)
-
-                    dropped_lead = self.is_packet_dropped(dist_to_leader, is_hardline=False, max_range=RANGE_YIP)
-                    if d_gcs <= RANGE_YIP and not self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_YIP):
+                    if d_gcs <= 50.0:
+                        drone.rssi, drone.link_quality = -35.0, 1.0
+                        drone.uplink_active = True
                         drone.downlink_active = True
                         drone.gateway_id = None
-                    elif current_leader and current_leader.downlink_active and dist_to_leader <= RANGE_YIP and not dropped_lead:
-                        drone.downlink_active = True
-                        drone.gateway_id = current_leader.id
                     else:
-                        drone.downlink_active = False
-                        drone.gateway_id = None
+                        dropped_up = self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_HOWL)
+                        drone.uplink_active = (d_gcs <= RANGE_HOWL and not dropped_up)
+                        drone.rssi, drone.link_quality = self.calculate_rssi(min(d_gcs, dist_to_leader), is_hardline=False)
+
+                        dropped_lead = self.is_packet_dropped(dist_to_leader, is_hardline=False, max_range=RANGE_YIP)
+                        if d_gcs <= RANGE_YIP and not self.is_packet_dropped(d_gcs, is_hardline=False, max_range=RANGE_YIP):
+                            drone.downlink_active = True
+                            drone.gateway_id = None
+                        elif current_leader and current_leader.downlink_active and dist_to_leader <= RANGE_YIP and not dropped_lead:
+                            drone.downlink_active = True
+                            drone.gateway_id = current_leader.id
+                        else:
+                            drone.downlink_active = False
+                            drone.gateway_id = None
 
                     drone.yip_lost = bool(drone.uplink_active and not drone.downlink_active)
 
@@ -1639,11 +1748,12 @@ class SITLWorldEngine:
     # ==========================================================================
     @staticmethod
     def get_pad_position(pad_idx: int) -> np.ndarray:
-        """Calculate coordinates for recovery/launch pad index.
+        """Calculate coordinates for recovery/launch pad index (0..7).
         Base pad layout outside the 3.0m tether clearance envelope.
         Centered at (0.0, -6.0, 0.5) with multi-drone grid layout (>= 2.5m separation)."""
-        pad_x = float((pad_idx % 4 - 1.5) * 2.5)
-        pad_y = float(-6.0 - (pad_idx // 4) * 3.0)
+        idx = pad_idx % 8
+        pad_x = float((idx % 4 - 1.5) * 2.5)
+        pad_y = float(-6.0 - (idx // 4) * 3.0)
         return np.array([pad_x, pad_y, 0.5], dtype=float)
 
     def is_in_comms_range(self) -> bool:
@@ -1685,17 +1795,26 @@ class SITLWorldEngine:
         self.swarm_rtb_active = False
         self.lost_link_loiter_timer = 0.0
         self.recovery_stage = "IDLE"
+        self.turnaround_timer = 0.0
+        self.atc_current_wave = 1
+        self.atc_waiting_queue.clear()
         if self.tether_severed and self.comms_mode == "TETHERED_RELAY":
             self.comms_mode = "LEADER_FOLLOWER"
         for drone in self.drones:
             if not drone.crashed and drone.flight_state in ("OVERHEAD_HOLD", "DESCENDING"):
                 drone.flight_state = "CRUISE"
                 drone.status = "FLEET_LEADER" if drone.is_leader else "ACTIVE"
+                drone.landing_stage = "NONE"
+                drone.gated_by_drone_id = None
+                drone.touchdown_confirmed = False
+                if drone.landing_pad_idx is not None and drone.landing_pad_idx in self.landing_pads:
+                    del self.landing_pads[drone.landing_pad_idx]
+                drone.landing_pad_idx = None
 
     def command_land_swarm(self) -> Union[List[int], Dict[str, Any]]:
         """Stage 2 Recovery: Operator-authorized coordinated landing.
-        Engages ATC pad reservation and sequential staggered descent
-        (2.0s clearance intervals to eliminate prop wash down-drafts).
+        Engages ATC pad reservation (max 8 pads), sequential staggered descent
+        with Downwash Anti-Vortex Gate, and overhead marshal wave holding (TKT-42).
         Enforces 120m Radio Horizon Airgap: dropped if fleet is outside comms range."""
         if not self.is_in_comms_range():
             return {
@@ -1706,30 +1825,58 @@ class SITLWorldEngine:
 
         airborne_drones = [
             d for d in self.drones
-            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING")
+            if not d.crashed and d.flight_state not in ("LANDED", "GROUND_IDLE", "DESCENDING")
         ]
         if not airborne_drones:
             return []
 
         airborne_drones.sort(key=lambda d: d.id)
         self.recovery_stage = "LANDING"
-        self.overhead_marshal_active = False
+
+        # Bounded to ATC pad capacity (0..7)
+        available_pads = [p for p in range(self.atc_capacity) if p not in self.landing_pads]
+        batch_drones = airborne_drones[:len(available_pads)]
+        marshal_drones = airborne_drones[len(available_pads):]
 
         queued_ids = []
-        for i, drone in enumerate(airborne_drones):
-            # Find lowest unreserved pad
-            used_pads = set(self.landing_pads.keys())
-            pad_idx = 0
-            while pad_idx in used_pads:
-                pad_idx += 1
+        for i, drone in enumerate(batch_drones):
+            pad_idx = available_pads[i]
             self.landing_pads[pad_idx] = drone.id
             drone.landing_pad_idx = pad_idx
             drone.landing_pad = self.get_pad_position(pad_idx)
-            drone.landing_wait_timer = i * 2.0  # 2.0s clearance intervals
+            drone.landing_wait_timer = i * 2.0  # 2.0s minimum clearance interval
             drone.flight_state = "DESCENDING"
             drone.status = "LANDING"
-            drone.landing_stage = "WAITING_CLEARANCE" if i > 0 else "APPROACH"
+            drone.touchdown_confirmed = False
+            if i == 0:
+                drone.landing_stage = "APPROACH"
+                drone.gated_by_drone_id = None
+            else:
+                drone.landing_stage = "WAITING_CLEARANCE"
+                drone.gated_by_drone_id = batch_drones[i - 1].id
             queued_ids.append(drone.id)
+
+        # Remaining airborne drones hold in circular orbit at overhead marshal shelves (Z in [25, 35]m)
+        if marshal_drones:
+            self.overhead_marshal_active = True
+            for k, drone in enumerate(marshal_drones):
+                drone.flight_state = "OVERHEAD_HOLD"
+                drone.status = "MARSHAL_HOLD"
+                drone.landing_stage = "MARSHAL_HOLD"
+                drone.landing_pad_idx = None
+                drone.landing_pad = None
+                drone.touchdown_confirmed = False
+                drone.gated_by_drone_id = None
+                shelf_z = 25.0 + (k % 5) * 2.0  # Shelves in [25, 35]m
+                angle = (2.0 * math.pi * k) / max(1, len(marshal_drones))
+                orbit_r = 18.0
+                drone.acknowledged_target = np.array([orbit_r * math.cos(angle), orbit_r * math.sin(angle), shelf_z], dtype=float)
+                drone.target_station = np.copy(drone.acknowledged_target)
+                if drone.id not in self.atc_waiting_queue:
+                    self.atc_waiting_queue.append(drone.id)
+        else:
+            self.overhead_marshal_active = False
+            self.atc_waiting_queue.clear()
 
         return queued_ids
 
@@ -1738,9 +1885,10 @@ class SITLWorldEngine:
         for drone in self.drones:
             if drone.id == drone_id and not drone.crashed and drone.flight_state not in ("LANDED", "DESCENDING"):
                 used_pads = set(self.landing_pads.keys())
-                pad_idx = 0
-                while pad_idx in used_pads:
-                    pad_idx += 1
+                available = [p for p in range(self.atc_capacity) if p not in used_pads]
+                if not available:
+                    return False
+                pad_idx = available[0]
                 self.landing_pads[pad_idx] = drone.id
                 drone.landing_pad_idx = pad_idx
                 drone.landing_pad = self.get_pad_position(pad_idx)
@@ -1748,6 +1896,8 @@ class SITLWorldEngine:
                 drone.flight_state = "DESCENDING"
                 drone.status = "LANDING"
                 drone.landing_stage = "APPROACH"
+                drone.gated_by_drone_id = None
+                drone.touchdown_confirmed = False
                 return True
         return False
 
@@ -1765,6 +1915,48 @@ class SITLWorldEngine:
                     del self.landing_pads[drone.landing_pad_idx]
                 return True
         return False
+
+    def clear_pads(self, turnaround_rearm: bool = False) -> Dict[str, Any]:
+        """Reset/clear occupied pads (salvaging/storing landed drones or re-arming)
+        and release the next wave of airborne drones from overhead marshal hold to land (TKT-42)."""
+        cleared_drones = []
+        for pad_idx, drone_id in list(self.landing_pads.items()):
+            d = self.get_drone_by_id(drone_id)
+            if d and d.flight_state in ("LANDED", "GROUND_IDLE"):
+                d.landing_pad_idx = None
+                d.landing_stage = "NONE"
+                if turnaround_rearm:
+                    d.flight_state = "GROUND_IDLE"
+                    d.status = "GROUND_IDLE"
+                    d.rotor_rpm = 0.0
+                else:
+                    d.flight_state = "LANDED"
+                    d.status = "LANDED"
+                del self.landing_pads[pad_idx]
+                cleared_drones.append(drone_id)
+
+        self.turnaround_timer = 0.0
+
+        waiting_airborne = [
+            d for d in self.drones
+            if not d.crashed and d.flight_state == "OVERHEAD_HOLD"
+        ]
+
+        released_ids = []
+        if waiting_airborne:
+            self.atc_current_wave += 1
+            res = self.command_land_swarm()
+            if isinstance(res, list):
+                released_ids = res
+
+        return {
+            "status": "OK",
+            "cleared_pads": len(cleared_drones),
+            "cleared_drone_ids": cleared_drones,
+            "released": len(released_ids),
+            "released_drone_ids": released_ids,
+            "current_wave": self.atc_current_wave,
+        }
 
     def command_scramble_swarm(self, stagger_s: float = 1.2) -> Dict[str, Any]:
         """Initiate sequenced cold scramble from ground pads (TKT-41).
@@ -2241,6 +2433,14 @@ class SITLWorldEngine:
             "scramble_active": bool(getattr(self, "scramble_active", False)),
             "scramble_timer": round(float(getattr(self, "scramble_timer", 0.0)), 2),
             "landing_pads": {int(k): v for k, v in self.landing_pads.items()},
+            "atc": {
+                "capacity": self.atc_capacity,
+                "current_wave": self.atc_current_wave,
+                "turnaround_timer": round(float(self.turnaround_timer), 1),
+                "waiting_marshal_count": len([d for d in self.drones if not d.crashed and d.flight_state == "OVERHEAD_HOLD"]),
+                "landed_count": len([d for d in self.drones if not d.crashed and d.flight_state in ("LANDED", "GROUND_IDLE")]),
+                "pads_occupied": len(self.landing_pads),
+            },
             "tether": {
                 "anchor": [round(float(v), 2) for v in self.tether_anchor],
                 "leader_id": current_leader.id if current_leader else -1,

@@ -125,12 +125,12 @@ class TestAutonomousSwarmRTBLanding(unittest.TestCase):
         self.assertEqual(sim.drones[1].landing_stage, "WAITING_CLEARANCE")
 
     def test_coordinated_soft_landing_full_simulation(self):
-        """Full simulation of 4 drones returning to base and executing 2-stage soft landing."""
+        """Full simulation of 4 drones returning to base and executing downwash-gated 2-stage soft landing."""
         sim = SwarmSimulator(drone_count=4)
         sim.command_land_swarm()
 
-        # Step sim until all drones touch down and disarm (max 30 seconds = 1800 ticks)
-        for _ in range(1800):
+        # Step sim until all drones touch down and disarm (downwash-gated sequential landing)
+        for _ in range(4000):
             sim.step(DT)
             if all(d.flight_state == "LANDED" for d in sim.drones):
                 break
@@ -292,6 +292,160 @@ class TestAutonomousSwarmRTBLanding(unittest.TestCase):
                     dist_to_pad_xy, 6.0,
                     f"Drone {d.id} drifted {dist_to_pad_xy:.1f}m away from pad while waiting clearance! Must hold column."
                 )
+
+    def test_base_horizon_high_gain_rf_dome(self):
+        """Verify TKT-42: Within 50m radius of base anchor, high-gain base station radio guarantees 100% link quality."""
+        sim = SwarmSimulator(drone_count=4)
+        sim.set_rf_jamming(0.4)  # High EW electronic warfare jamming rate
+
+        # Test distance <= 50m: guaranteed 100% link quality
+        for test_dist in [0.0, 10.0, 25.0, 49.9, 50.0]:
+            drop_prob, rssi, lq = sim.calculate_base_rf_link(test_dist)
+            self.assertEqual(drop_prob, 0.0, f"Distance {test_dist}m must have 0 packet drop inside 50m dome")
+            self.assertEqual(lq, 1.0, f"Distance {test_dist}m must guarantee 1.0 (100%) link quality")
+            self.assertEqual(rssi, -35.0)
+
+        # Beyond 50m with jamming, drop probability > 0 and quality < 1.0
+        drop_prob_far, _, lq_far = sim.calculate_base_rf_link(55.0)
+        self.assertGreater(drop_prob_far, 0.0, "Outside 50m dome, packet drop must reflect path loss/jamming")
+        self.assertLess(lq_far, 1.0, "Outside 50m dome, link quality must degrade under jamming")
+
+    def test_downwash_anti_vortex_gate(self):
+        """Verify TKT-42: Downwash vortex gate holds Drone k+1 at Z >= 18m shelf until Drone k confirms TOUCHDOWN_CONFIRMED."""
+        sim = SwarmSimulator(drone_count=2)
+        # Position drones near base
+        sim.drones[0].pos = np.array([0.0, -6.0, 20.0], dtype=float)
+        sim.drones[1].pos = np.array([2.5, -6.0, 22.0], dtype=float)
+
+        queued = sim.command_land_swarm()
+        self.assertEqual(queued, [0, 1])
+
+        # Drone 0 is cleared immediately for APPROACH
+        self.assertEqual(sim.drones[0].landing_stage, "APPROACH")
+        self.assertIsNone(sim.drones[0].gated_by_drone_id)
+
+        # Drone 1 is gated by Drone 0
+        self.assertEqual(sim.drones[1].landing_stage, "WAITING_CLEARANCE")
+        self.assertEqual(sim.drones[1].gated_by_drone_id, 0)
+        self.assertAlmostEqual(sim.drones[1].landing_wait_timer, 2.0)
+
+        # Step 150 ticks (2.5 seconds): Drone 1 timer hits 0.0, but Drone 0 is still descending (not touched down)
+        for _ in range(150):
+            sim.step(DT)
+
+        self.assertFalse(sim.drones[0].flight_state == "LANDED", "Drone 0 should still be descending at 2.5s")
+        self.assertFalse(sim.drones[0].touchdown_confirmed)
+        # Drone 1 MUST remain in WAITING_CLEARANCE held at altitude shelf Z >= 18m
+        self.assertEqual(
+            sim.drones[1].landing_stage,
+            "WAITING_CLEARANCE",
+            "Drone 1 must remain gated in WAITING_CLEARANCE while Drone 0 is descending"
+        )
+        self.assertGreaterEqual(sim.drones[1].pos[2], 18.0, "Drone 1 must hold altitude above ground effect shelf")
+
+        # Step until Drone 0 confirms touchdown
+        for _ in range(1200):
+            sim.step(DT)
+            if sim.drones[0].flight_state == "LANDED":
+                break
+
+        self.assertEqual(sim.drones[0].flight_state, "LANDED")
+        self.assertTrue(sim.drones[0].touchdown_confirmed)
+        self.assertEqual(sim.drones[0].landing_stage, "TOUCHDOWN_CONFIRMED")
+
+        # 1 tick for Drone 1 to process touchdown clearance
+        sim.step(DT)
+
+        # Now Drone 1's downwash gate is released and it advances to APPROACH
+        self.assertEqual(sim.drones[1].landing_stage, "APPROACH")
+
+    def test_batched_atc_wave_management_and_overhead_marshal(self):
+        """Verify TKT-42: Fleets exceeding 8 pads are batched: 8 pads assigned, remainder held in overhead marshal."""
+        sim = SwarmSimulator(drone_count=12)
+        queued = sim.command_land_swarm()
+
+        # Exactly 8 drones receive recovery pad allocation
+        self.assertEqual(len(queued), 8)
+        self.assertEqual(len(sim.landing_pads), 8)
+        self.assertEqual(sim.recovery_stage, "LANDING")
+        self.assertTrue(sim.overhead_marshal_active)
+
+        # Remaining 4 drones (drones 8..11) hold at overhead marshal shelves in [25, 35]m
+        for did in range(8, 12):
+            drone = sim.drones[did]
+            self.assertEqual(drone.flight_state, "OVERHEAD_HOLD")
+            self.assertEqual(drone.status, "MARSHAL_HOLD")
+            self.assertIsNone(drone.landing_pad_idx)
+            self.assertGreaterEqual(drone.acknowledged_target[2], 25.0)
+            self.assertLessEqual(drone.acknowledged_target[2], 35.0)
+
+        # Telemetry snapshot exposes ATC state
+        snap = sim.get_state_snapshot()
+        self.assertIn("atc", snap)
+        self.assertEqual(snap["atc"]["capacity"], 8)
+        self.assertEqual(snap["atc"]["pads_occupied"], 8)
+        self.assertEqual(snap["atc"]["waiting_marshal_count"], 4)
+        self.assertEqual(snap["atc"]["current_wave"], 1)
+
+    def test_clear_pads_next_wave_release(self):
+        """Verify TKT-42: CLEAR_PADS resets occupied pads and releases next wave from overhead marshal."""
+        sim = SwarmSimulator(drone_count=12)
+        sim.command_land_swarm()
+
+        # Simulate first wave of 8 drones completing touchdown
+        for did in range(8):
+            d = sim.drones[did]
+            d.flight_state = "LANDED"
+            d.status = "LANDED"
+            d.landing_stage = "TOUCHDOWN_CONFIRMED"
+            d.touchdown_confirmed = True
+            d.pos = sim.get_pad_position(d.landing_pad_idx)
+            d.vel = np.zeros(3, dtype=float)
+            d.rotor_rpm = 0.0
+
+        # Operator triggers CLEAR_PADS // NEXT WAVE
+        res = sim.clear_pads()
+        self.assertEqual(res["status"], "OK")
+        self.assertEqual(res["cleared_pads"], 8)
+        self.assertEqual(res["released"], 4)
+        self.assertEqual(res["current_wave"], 2)
+
+        # The 4 waiting drones (8..11) are now allocated pads 0..3 in Wave 2!
+        for did in range(8, 12):
+            drone = sim.drones[did]
+            self.assertEqual(drone.flight_state, "DESCENDING")
+            self.assertIsNotNone(drone.landing_pad_idx)
+            self.assertIn(drone.landing_pad_idx, range(4))
+
+        # No drones left holding in marshal
+        self.assertFalse(sim.overhead_marshal_active)
+
+    def test_automated_turnaround_countdown(self):
+        """Verify TKT-42: Automated 12s turnaround countdown clears pads and launches next wave when timers elapse."""
+        sim = SwarmSimulator(drone_count=10)
+        sim.command_land_swarm()
+
+        # Mark first wave of 8 drones as landed
+        for did in range(8):
+            d = sim.drones[did]
+            d.flight_state = "LANDED"
+            d.status = "LANDED"
+            d.touchdown_confirmed = True
+            d.rotor_rpm = 0.0
+
+        # Step 1 tick: turnaround timer should engage at 12.0s
+        sim.step(DT)
+        self.assertGreater(sim.turnaround_timer, 0.0)
+        self.assertLessEqual(sim.turnaround_timer, 12.0)
+
+        # Step 725 ticks (12.1 seconds)
+        for _ in range(725):
+            sim.step(DT)
+
+        # Turnaround timer expired: pads cleared and wave 2 (remaining 2 drones) released!
+        self.assertEqual(sim.atc_current_wave, 2)
+        self.assertEqual(sim.drones[8].flight_state, "DESCENDING")
+        self.assertEqual(sim.drones[9].flight_state, "DESCENDING")
 
 
 if __name__ == "__main__":
