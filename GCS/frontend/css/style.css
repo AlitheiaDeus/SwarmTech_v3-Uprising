@@ -568,6 +568,25 @@ body:has(#right-panel.collapsed) #tab-restore-right,
   letter-spacing: 0.5px;
 }
 
+.drone-sysid-badge {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--neon-cyan);
+  background: rgba(0, 240, 255, 0.12);
+  border: 1px solid rgba(0, 240, 255, 0.3);
+  padding: 1px 4px;
+  border-radius: 2px;
+  letter-spacing: 0.5px;
+}
+
+.card-uid-sub {
+  font-size: 9px;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  color: #5a7e96;
+  letter-spacing: 0.5px;
+  margin-top: 1px;
+}
+
 .drone-role-badge {
   font-size: 9px;
   color: var(--text-muted);

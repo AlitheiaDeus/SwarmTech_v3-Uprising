@@ -41,6 +41,7 @@ import numpy as np
 from OBC.backend.drone_firmware import Drone, TIER_LEADER, TIER_ESCORT, TIER_SCOUT
 from OBC.backend.brains import BaseBrain, BRAIN_REGISTRY, LeaderFollowerBrain, GossipConsensusBrain
 from GCS.backend.c2_gateway import C2Gateway, ROUTE_PRESETS
+from SIM.backend.fleet_registry import FleetRegistry
 
 
 # ==============================================================================
@@ -279,12 +280,18 @@ class SITLWorldEngine:
         self.landing_pads.clear()
         self._highest_drone_id = count - 1
 
+        # Fleet Hardware Identity Registry (TKT-48)
+        self.fleet_registry = FleetRegistry(initial_count=count)
+
         # Leader #0 positioned at (0, 0, 20)
+        rec0 = self.fleet_registry.get_by_drone_id(0)
         leader = Drone(
             drone_id=0,
             tier=TIER_LEADER,
             pos=np.array([0.0, 0.0, 20.0], dtype=float),
             is_leader=True,
+            hardware_uid=rec0.hardware_uid if rec0 else "3842A10F9B200001",
+            tail_number=rec0.tail_number if rec0 else "ALITHEIA-V01",
         )
         self.drones.append(leader)
 
@@ -295,11 +302,14 @@ class SITLWorldEngine:
             x = -row * 6.0
             y = side * row * 6.0
             z = 20.0 + (row * 0.5)
+            rec_i = self.fleet_registry.get_by_drone_id(i)
             drone = Drone(
                 drone_id=i,
                 tier=TIER_ESCORT,
                 pos=np.array([x, y, z], dtype=float),
                 is_leader=False,
+                hardware_uid=rec_i.hardware_uid if rec_i else f"3842A10F9B20{i + 1:04X}",
+                tail_number=rec_i.tail_number if rec_i else f"ALITHEIA-V{i + 1:02d}",
             )
             self.drones.append(drone)
 
@@ -1438,6 +1448,13 @@ class SITLWorldEngine:
         drone.crashed = True
         drone.flight_state = "CRASHED"
         drone.status = "CRASHED"
+        if hasattr(self, "fleet_registry"):
+            self.fleet_registry.record_casualty(
+                drone_id=drone.id,
+                lkp=list(drone.pos),
+                reason=reason,
+                sim_time=self.sim_time,
+            )
         was_leader = drone.is_leader
         if (drone.is_leader or drone.id == 0) and self.comms_mode == "TETHERED_RELAY":
             if not self.tether_severed:
@@ -1681,11 +1698,24 @@ class SITLWorldEngine:
         slot_idx = new_id % 8
         spawn_pos = self.get_pad_position(slot_idx)
 
+        # Allocate standby reserve from FleetRegistry (TKT-48)
+        if hasattr(self, "fleet_registry"):
+            reserve_rec = self.fleet_registry.allocate_reserve(
+                drone_id=new_id, pad_id=slot_idx, sim_time=self.sim_time
+            )
+            hw_uid = reserve_rec.hardware_uid
+            tail_num = reserve_rec.tail_number
+        else:
+            hw_uid = f"3842A10F9B20FF{new_id:02X}"
+            tail_num = f"ALITHEIA-RES-{new_id:02d}"
+
         drone = Drone(
             drone_id=new_id,
             tier=TIER_ESCORT,
             pos=spawn_pos,
             is_leader=False,
+            hardware_uid=hw_uid,
+            tail_number=tail_num,
         )
         drone.flight_state = "TAKEOFF"
         drone.status = "ACTIVE"
@@ -1747,6 +1777,8 @@ class SITLWorldEngine:
 
     def reboot_drone(self, drone_id: int) -> None:
         """Safely redeploy a crashed drone into the formation via vertical takeoff."""
+        if hasattr(self, "fleet_registry"):
+            self.fleet_registry.reboot_airframe(drone_id)
         for drone in self.drones:
             if drone.id == drone_id:
                 ground_pos = np.array([drone.pos[0], drone.pos[1], 0.5], dtype=float)
@@ -1764,6 +1796,8 @@ class SITLWorldEngine:
         has_living_leader = any(d.is_leader and not d.crashed for d in self.drones)
 
         for i, drone in enumerate(crashed_drones):
+            if hasattr(self, "fleet_registry"):
+                self.fleet_registry.reboot_airframe(drone.id)
             make_leader = (not has_living_leader and i == 0)
             ground_pos = np.array([drone.pos[0], drone.pos[1], 0.5], dtype=float)
             # Give slight stagger if multiple crashed at the exact same location
@@ -2037,6 +2071,7 @@ class SITLWorldEngine:
                 "visible": (self.comms_mode == "TETHERED_RELAY" and not self.tether_severed),
             },
             "drones": drones_list,
+            "fleet_registry": self.fleet_registry.get_registry_snapshot() if hasattr(self, "fleet_registry") else {},
             "brain_telemetry": self.brain.get_telemetry_extra(),
         }
 

@@ -28,10 +28,16 @@ class Drone:
         tier: int = TIER_ESCORT,
         pos: Optional[np.ndarray] = None,
         is_leader: bool = False,
+        hardware_uid: str = "",
+        tail_number: str = "",
     ):
         self.id: int = drone_id
         self.tier: int = tier
         self.is_leader: bool = is_leader
+
+        # Airframe Hardware Identity (TKT-48)
+        self.hardware_uid: str = hardware_uid or f"3842A10F9B20{drone_id + 1:04X}"
+        self.tail_number: str = tail_number or f"ALITHEIA-V{drone_id + 1:02d}"
 
         # Kinematics
         self.pos: np.ndarray = (
@@ -106,8 +112,14 @@ class Drone:
         pos: np.ndarray,
         is_leader: bool = False,
         flight_state: str = "TAKEOFF",
+        hardware_uid: Optional[str] = None,
+        tail_number: Optional[str] = None,
     ) -> None:
         """Reset drone state for relaunch or reboot."""
+        if hardware_uid is not None:
+            self.hardware_uid = hardware_uid
+        if tail_number is not None:
+            self.tail_number = tail_number
         self.pos = np.array(pos, dtype=float)
         self.vel = np.zeros(3, dtype=float)
         self.acc = np.zeros(3, dtype=float)
@@ -169,6 +181,9 @@ class Drone:
         """Serialize state for WebSocket JSON telemetry frame."""
         return {
             "id": self.id,
+            "sysid": self.id + 1,
+            "hardware_uid": self.hardware_uid,
+            "tail_number": self.tail_number,
             "tier": self.tier,
             "is_leader": self.is_leader,
             "pos": [round(float(v), 2) for v in self.pos],

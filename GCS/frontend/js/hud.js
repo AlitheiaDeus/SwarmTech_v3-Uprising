@@ -590,21 +590,22 @@
                 }
 
                 // Detect Autonomic Events & State Changes
+                const dName = d.tail_number || `Drone #${d.id}`;
                 if (d.crashed && !deadDroneIds.has(d.id)) {
                     deadDroneIds.add(d.id);
-                    logEvent('CASUALTY', `Drone #${d.id} crashed! Ballistic drop initiated.`);
+                    logEvent('CASUALTY', `${dName} crashed! Ballistic drop initiated.`);
                 } else if (!d.crashed && deadDroneIds.has(d.id)) {
                     deadDroneIds.delete(d.id);
-                    logEvent('STATUS', `Drone #${d.id} rebooted and active.`);
+                    logEvent('STATUS', `${dName} rebooted and active.`);
                 }
 
                 if (d.flight_state === 'TAKEOFF' && !takeoffDroneIds.has(d.id)) {
                     takeoffDroneIds.add(d.id);
-                    logEvent('LAUNCH', `Reinforcement Drone #${d.id} launched from base pad.`);
+                    logEvent('LAUNCH', `Reinforcement ${dName} launched from base pad.`);
                 } else if (d.flight_state !== 'TAKEOFF' && takeoffDroneIds.has(d.id)) {
                     takeoffDroneIds.delete(d.id);
                     if (d.flight_state === 'EN_ROUTE') {
-                        logEvent('STATUS', `Drone #${d.id} reached transition altitude (20m). En route to formation.`);
+                        logEvent('STATUS', `${dName} reached transition altitude (20m). En route to formation.`);
                     }
                 }
 
@@ -612,13 +613,13 @@
                     enrouteDroneIds.add(d.id);
                 } else if (d.flight_state === 'CRUISE' && enrouteDroneIds.has(d.id)) {
                     enrouteDroneIds.delete(d.id);
-                    logEvent('STATUS', `Drone #${d.id} reached formation slot. Status: CRUISE.`);
+                    logEvent('STATUS', `${dName} reached formation slot. Status: CRUISE.`);
                 }
 
                 if (d.flight_state === 'DESCENDING' && !descendingDroneIds.has(d.id)) {
                     descendingDroneIds.add(d.id);
                     const padStr = d.landing_pad_idx !== undefined && d.landing_pad_idx !== null ? `Pad #${d.landing_pad_idx}` : 'designated pad';
-                    logEvent('ATC', `Drone #${d.id} allocated ${padStr}. Commencing 2-stage deceleration descent.`);
+                    logEvent('ATC', `${dName} allocated ${padStr}. Commencing 2-stage deceleration descent.`);
                 } else if (d.flight_state !== 'DESCENDING' && descendingDroneIds.has(d.id)) {
                     descendingDroneIds.delete(d.id);
                 }
@@ -626,26 +627,26 @@
                 if (d.flight_state === 'LANDED' && !landedDroneIds.has(d.id)) {
                     landedDroneIds.add(d.id);
                     const padStr = d.landing_pad_idx !== undefined && d.landing_pad_idx !== null ? `Pad #${d.landing_pad_idx}` : 'pad';
-                    logEvent('TOUCHDOWN', `Drone #${d.id} touched down on ${padStr}. Motors disarmed (0 RPM).`);
+                    logEvent('TOUCHDOWN', `${dName} touched down on ${padStr}. Motors disarmed (0 RPM).`);
                 } else if (d.flight_state !== 'LANDED' && landedDroneIds.has(d.id)) {
                     landedDroneIds.delete(d.id);
-                    logEvent('TAKEOFF', `Drone #${d.id} launching from pad. Rejoining swarm.`);
+                    logEvent('TAKEOFF', `${dName} launching from pad. Rejoining swarm.`);
                 }
 
                 if (d.lost_link && !lostLinkIds.has(d.id)) {
                     lostLinkIds.add(d.id);
-                    logEvent('WARN', `Drone #${d.id} LOST LINK! Seeking LKP (${d.lkp[0]}, ${d.lkp[1]}, ${d.lkp[2]}).`);
+                    logEvent('WARN', `${dName} LOST LINK! Seeking LKP (${d.lkp[0]}, ${d.lkp[1]}, ${d.lkp[2]}).`);
                 } else if (!d.lost_link && lostLinkIds.has(d.id)) {
                     lostLinkIds.delete(d.id);
-                    logEvent('STATUS', `Drone #${d.id} link restored. Rejoined swarm.`);
+                    logEvent('STATUS', `${dName} link restored. Rejoined swarm.`);
                 }
 
                 if (d.status === 'BREAKAWAY_JETTISON' && !jettisonDroneIds.has(d.id)) {
                     jettisonDroneIds.add(d.id);
-                    logEvent('FAILSAFE', `Drone #${d.id} executing 3D breakaway dive (ΔZ=-4m) and cable purge.`);
+                    logEvent('FAILSAFE', `${dName} executing 3D breakaway dive (ΔZ=-4m) and cable purge.`);
                 } else if (d.status !== 'BREAKAWAY_JETTISON' && jettisonDroneIds.has(d.id)) {
                     jettisonDroneIds.delete(d.id);
-                    logEvent('STATUS', `Drone #${d.id} umbilical purge complete. Rejoining formation as unencumbered escort.`);
+                    logEvent('STATUS', `${dName} umbilical purge complete. Rejoining formation as unencumbered escort.`);
                 }
 
                 // Update / Build Card DOM
@@ -670,6 +671,16 @@
         }
 
         // Update In-Place for High-FPS smoothness
+        if (card.elIdLabel) {
+            card.elIdLabel.textContent = drone.tail_number || `ALITHEIA-V${String(drone.id + 1).padStart(2, '0')}`;
+        }
+        if (card.elSysidBadge) {
+            card.elSysidBadge.textContent = `SYSID ${drone.sysid || (drone.id + 1)}`;
+        }
+        if (card.elUidSub) {
+            card.elUidSub.textContent = `UID: ${drone.hardware_uid || 'UNKNOWN'}`;
+        }
+
         const speed = Math.hypot(drone.vel[0], drone.vel[1], drone.vel[2]).toFixed(1);
         const alt = drone.pos[2].toFixed(1);
 
@@ -846,15 +857,21 @@
         el.className = 'drone-telemetry-card';
         el.id = `card-drone-${drone.id}`;
 
+        const tailNum = drone.tail_number || `ALITHEIA-V${String(drone.id + 1).padStart(2, '0')}`;
+        const sysId = drone.sysid || (drone.id + 1);
+        const hwUid = drone.hardware_uid || 'UNKNOWN';
+
         el.innerHTML = `
             <div class="card-header">
                 <div class="card-id-group">
                     <span class="drone-dot"></span>
-                    <strong class="drone-id-label">DRONE #${drone.id}</strong>
+                    <strong class="drone-id-label">${tailNum}</strong>
+                    <span class="drone-sysid-badge">SYSID ${sysId}</span>
                     <span class="drone-role-badge">TIER-${drone.tier}</span>
                 </div>
                 <span class="status-tag tag-active">ACTIVE</span>
             </div>
+            <div class="card-uid-sub">UID: ${hwUid}</div>
             <div class="card-metrics">
                 <div class="metric-col">
                     <span class="metric-label">ALT</span>
@@ -922,6 +939,9 @@
 
         return {
             el: el,
+            elIdLabel: el.querySelector('.drone-id-label'),
+            elSysidBadge: el.querySelector('.drone-sysid-badge'),
+            elUidSub: el.querySelector('.card-uid-sub'),
             elAlt: el.querySelector('.metric-alt'),
             elVel: el.querySelector('.metric-vel'),
             elBat: el.querySelector('.metric-bat'),

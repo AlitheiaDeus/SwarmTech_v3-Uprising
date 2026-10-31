@@ -18,6 +18,10 @@
   <img src="docs/images/tactical_gcs_hero.png" alt="AlitheiaHive Tactical Ground Control Station (GCS) Viewport" width="100%">
 </p>
 
+> [!TIP]
+> **Deploying to Physical Hardware?**  
+> Check out the **[Physical Hardware Deployment Blueprint](docs/HARDWARE_DEPLOYMENT_BLUEPRINT.md)** for a zero-fluff guide on connecting real micro-controllers (Seeed XIAO C5 / ESP32 / Pi Zero) to real hobby GPS drones over Wi-Fi, RTK, and MAVLink.
+
 ---
 
 ## 1. System Mission & The 4 Airgaps

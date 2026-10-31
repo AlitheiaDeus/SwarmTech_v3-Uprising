@@ -53,6 +53,8 @@ STANDARD_PARAMS: List[Tuple[str, int, Any]] = [
     ("FRAME_CLASS", 1, lambda s: 1.0),   # 1 = Quad
     ("FRAME_TYPE", 1, lambda s: 1.0),    # 1 = X
     ("ARMING_CHECK", 6, lambda s: 0.0),  # Checks disabled
+    ("PILOT_SPEED_UP", 6, lambda s: 250.0),
+    ("PILOT_SPEED_DN", 6, lambda s: 150.0),
     ("STAT_RUNTIME", 5, lambda s: 120.0),
     ("BATT_CAPACITY", 6, lambda s: 5000.0),
     ("BATT_MONITOR", 1, lambda s: 4.0),
@@ -653,6 +655,66 @@ class MavlinkBridge:
         self.mav.srcSystem = prev_sys
         return bytes_sent
 
+    def send_autopilot_version(
+        self,
+        dest_addr: Optional[Tuple[str, int]] = None,
+        sys_id: Optional[int] = None,
+    ) -> int:
+        """Send AUTOPILOT_VERSION (#148) with airframe hardware silicon UID and capabilities.
+        If sys_id is provided, sends for that vehicle; otherwise sends for all active swarm airframes."""
+        if not HAVE_PYMAVLINK or self.mav is None:
+            return 0
+        if not hasattr(self.mav, "autopilot_version_encode"):
+            return 0
+
+        bytes_sent = 0
+        prev_sys = self.mav.srcSystem
+
+        sys_ids = [sys_id] if sys_id is not None else [
+            int(d.id) + 1 for d in self.sim.drones if not d.crashed
+        ]
+        if not sys_ids:
+            sys_ids = [1]
+
+        capabilities = (
+            getattr(mavlink2, "MAV_PROTOCOL_CAPABILITY_MAVLINK2", 0)
+            | getattr(mavlink2, "MAV_PROTOCOL_CAPABILITY_PARAM_FLOAT", 0)
+            | getattr(mavlink2, "MAV_PROTOCOL_CAPABILITY_MISSION_FLOAT", 0)
+            | getattr(mavlink2, "MAV_PROTOCOL_CAPABILITY_SET_POSITION_TARGET_LOCAL_NED", 0)
+            | getattr(mavlink2, "MAV_PROTOCOL_CAPABILITY_COMMAND_INT", 0)
+        )
+
+        for sid in sys_ids:
+            drone = next((d for d in self.sim.drones if d.id + 1 == sid), None)
+            hw_uid_str = getattr(drone, "hardware_uid", f"3842A10F9B20{sid - 1:04X}")
+            try:
+                uid_int = int(hw_uid_str, 16)
+            except (ValueError, TypeError):
+                uid_int = 0x3842A10F9B200000 + sid
+
+            uid_bytes = uid_int.to_bytes(8, "big")
+            uid2 = list(uid_bytes.ljust(18, b"\x00"))
+
+            self.mav.srcSystem = sid
+            msg = self.mav.autopilot_version_encode(
+                capabilities=capabilities,
+                flight_sw_version=0x030C0000,  # v3.12.0
+                middleware_sw_version=0,
+                os_sw_version=0,
+                board_version=0,
+                flight_custom_version=[0] * 8,
+                middleware_custom_version=[0] * 8,
+                os_custom_version=[0] * 8,
+                vendor_id=0x26AC,
+                product_id=0x0001,
+                uid=uid_int,
+                uid2=uid2,
+            )
+            bytes_sent += self.send_mavlink_packet(msg, dest_addr)
+
+        self.mav.srcSystem = prev_sys
+        return bytes_sent
+
     def poll_mavlink_commands(self) -> List[Dict[str, Any]]:
         """Non-blocking poll of MAVLink socket for inbound command packets from Mission Planner/QGC.
         Parses SET_POSITION_TARGET_GLOBAL_INT, SET_POSITION_TARGET_LOCAL_NED, and COMMAND_LONG."""
@@ -850,8 +912,16 @@ class MavlinkBridge:
                 req_msg = int(msg.param1)
                 if req_msg == mavlink2.MAVLINK_MSG_ID_HOME_POSITION:
                     self.send_home_position(dest_addr=addr, sys_id=target_sys)
+                elif req_msg == getattr(mavlink2, "MAVLINK_MSG_ID_AUTOPILOT_VERSION", 148):
+                    self.send_autopilot_version(dest_addr=addr, sys_id=target_sys)
                 self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr, src_sys=target_sys)
                 return {"status": "OK", "cmd": "MAV_CMD_REQUEST_MESSAGE", "requested": req_msg, "sys_id": target_sys}
+
+            # MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES (520) - Mission Planner / QGC Autopilot & Silicon UID probe
+            elif cmd == getattr(mavlink2, "MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES", 520):
+                self.send_autopilot_version(dest_addr=addr, sys_id=target_sys)
+                self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_ACCEPTED, dest_addr=addr, src_sys=target_sys)
+                return {"status": "OK", "cmd": "MAV_CMD_REQUEST_AUTOPILOT_CAPABILITIES", "sys_id": target_sys}
 
             else:
                 self.send_mavlink_ack(command=cmd, result=mavlink2.MAV_RESULT_UNSUPPORTED, dest_addr=addr, src_sys=target_sys)
