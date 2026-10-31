@@ -598,6 +598,9 @@ class SITLWorldEngine:
         # 1. Update Physical RF Channel, Asymmetric Link Budget & Mesh Gateway (TKT-49)
         self._update_radio_comms()
 
+        # 1b. Update In-Flight Dynamic Swarm Enrollment & P2P Handshakes (TKT-50)
+        self._update_in_flight_enrollment(dt)
+
         # 2. Comms & Packet Protocol from active Brain Plugin
         self.brain.update_comms(dt)
 
@@ -641,23 +644,25 @@ class SITLWorldEngine:
 
             elif drone.flight_state == "EN_ROUTE":
                 # Phase 2: Autonomous transit toward swarm formation slot or active target
-                # Check arrival proximity to transition to Phase 3: CRUISE
-                if self.active_brain_name == "LEADER_FOLLOWER":
-                    current_leader = self.leader
-                    if current_leader is not None:
-                        if hasattr(self.brain, "_get_formation_slot"):
-                            slot_pos = self.brain._get_formation_slot(drone, current_leader)
-                            if float(np.linalg.norm(drone.pos - slot_pos)) <= 5.0:
-                                drone.flight_state = "CRUISE"
+                # Check arrival proximity to transition to Phase 3: CRUISE (only once enrolled)
+                if getattr(drone, "enrolled", True):
+                    if self.active_brain_name == "LEADER_FOLLOWER":
+                        current_leader = self.leader
+                        if current_leader is not None:
+                            if hasattr(self.brain, "_get_formation_slot"):
+                                slot_pos = self.brain._get_formation_slot(drone, current_leader)
+                                if float(np.linalg.norm(drone.pos - slot_pos)) <= 5.0:
+                                    drone.flight_state = "CRUISE"
+                        else:
+                            drone.flight_state = "CRUISE"
+                    elif self.active_brain_name == "GOSSIP_CONSENSUS":
+                        target_check = getattr(drone, "target_station", None)
+                        if target_check is None and hasattr(self.brain, "peer_states") and drone.id in self.brain.peer_states:
+                            target_check = self.brain.peer_states[drone.id].active_target
+                        if target_check is not None and float(np.linalg.norm(drone.pos - target_check)) <= 5.0:
+                            drone.flight_state = "CRUISE"
                     else:
                         drone.flight_state = "CRUISE"
-                elif self.active_brain_name == "GOSSIP_CONSENSUS":
-                    if hasattr(self.brain, "peer_states") and drone.id in self.brain.peer_states:
-                        peer_state = self.brain.peer_states[drone.id]
-                        if float(np.linalg.norm(drone.pos - peer_state.active_target)) <= 15.0:
-                            drone.flight_state = "CRUISE"
-                else:
-                    drone.flight_state = "CRUISE"
 
             elif drone.flight_state == "LANDED":
                 guidance_accs[drone.id] = np.zeros(3, dtype=float)
@@ -811,6 +816,8 @@ class SITLWorldEngine:
                     drone.tier = TIER_LEADER
                     drone.status = "FLEET_LEADER"
                     drone.flight_state = "CRUISE"
+                    drone.enrolled = True
+                    drone.enrollment_status = "ENROLLED"
 
             # Strict safety floor clamp during breakaway dive (TKT-27)
             if drone.status == "BREAKAWAY_JETTISON" and not drone.tether_jettisoned:
@@ -1058,6 +1065,77 @@ class SITLWorldEngine:
             return
 
     # ==========================================================================
+    # 1b. Dynamic In-Flight Swarm Enrollment & P2P Handshakes (TKT-50)
+    # ==========================================================================
+    def _update_in_flight_enrollment(self, dt: float) -> None:
+        """Evaluate in-flight dynamic P2P enrollment handshakes for unenrolled scouts (TKT-50).
+        Scouts clear initial pad climb (Z >= 18.0m) and seek to handshake with active enrolled peers
+        within RANGE_P2P (60.0m) or leader within RANGE_BARK (90.0m)."""
+        living = [d for d in self.drones if not d.crashed]
+        enrolled_peers = [d for d in living if getattr(d, "enrolled", True)]
+
+        # If no living enrolled peers exist (e.g. all original fleet died),
+        # an ascending scout that clears Z >= 20m assumes leadership and becomes enrolled
+        if not enrolled_peers:
+            for d in living:
+                if not getattr(d, "enrolled", True) and d.pos[2] >= 20.0:
+                    d.enrolled = True
+                    d.enrollment_status = "ENROLLED"
+                    d.is_leader = True
+                    d.tier = TIER_LEADER
+                    d.status = "FLEET_LEADER"
+                    enrolled_peers.append(d)
+                    break
+            return
+
+        for scout in living:
+            # Advance slot settling timer
+            if getattr(scout, "enrollment_timer", 0.0) > 0.0:
+                scout.enrollment_timer = max(0.0, scout.enrollment_timer - dt)
+
+            # Check unenrolled scouts that have climbed out of pad effect (Z >= 18.0m)
+            if not getattr(scout, "enrolled", True) and scout.pos[2] >= 18.0:
+                # Find peers within P2P mesh range (60m) or leader within Bark (90m)
+                peers_in_range = []
+                for peer in enrolled_peers:
+                    d_peer = float(np.linalg.norm(scout.pos - peer.pos))
+                    max_contact = RANGE_BARK if (peer.is_leader or peer.tier == TIER_LEADER) else RANGE_P2P
+                    if d_peer <= max_contact and not self.is_packet_dropped(d_peer, is_hardline=False, max_range=max_contact):
+                        peers_in_range.append(peer)
+
+                if peers_in_range:
+                    # In-flight P2P Handshake triggered!
+                    scout.enrolled = True
+                    scout.enrollment_status = "ENROLLED"
+                    scout.enrollment_timer = 2.5  # Smooth slot settling ramp
+
+                    # State synchronization
+                    if self.active_brain_name == "GOSSIP_CONSENSUS" and hasattr(self.brain, "peer_states"):
+                        best_peer = max(
+                            peers_in_range,
+                            key=lambda p: getattr(self.brain.peer_states.get(p.id), "active_seq", -1)
+                        )
+                        if best_peer.id in self.brain.peer_states:
+                            bp_state = self.brain.peer_states[best_peer.id]
+                            scout_state = self.brain._get_peer_state(scout.id)
+                            scout_state.active_seq = bp_state.active_seq
+                            scout_state.active_target = np.copy(bp_state.active_target)
+                            scout_state.pending_seq = bp_state.pending_seq
+                            scout_state.pending_target = np.copy(bp_state.pending_target)
+                            scout_state.gossip_status = "COORDINATED"
+                            scout.acknowledged_target = np.copy(bp_state.active_target)
+                    elif self.active_brain_name == "LEADER_FOLLOWER":
+                        scout.acknowledged_target = np.copy(self.get_acknowledged_target())
+
+                    # Clear lost-link flag if previously isolated on pad
+                    scout.lost_link = False
+                    scout.last_heartbeat_time = self.sim_time
+                    if scout.status == "LOST_LINK":
+                        scout.status = "ACTIVE"
+
+                    enrolled_peers.append(scout)
+
+    # ==========================================================================
     # 2. Tether Avoidance & Severance Dynamics
     # ==========================================================================
     def _update_tether_dynamics(self) -> None:
@@ -1210,7 +1288,7 @@ class SITLWorldEngine:
 
         # Fallback to local calculation if brain not initialized
         living_followers = [
-            d for d in self.drones if not d.crashed and not d.is_leader
+            d for d in self.drones if not d.crashed and not d.is_leader and getattr(d, "enrolled", True)
         ]
         try:
             k = living_followers.index(drone) + 1
@@ -1589,11 +1667,12 @@ class SITLWorldEngine:
                 return True
         return False
 
-    def launch_reinforcement(self) -> Drone:
-        """Deploy a new reinforcement drone from the base launch pad.
+    def launch_reinforcement(self, rejoin_target: Optional[np.ndarray] = None) -> Drone:
+        """Deploy a new reinforcement drone from the base launch pad (TKT-50).
         Assigns the next sequential drone ID (max_id + 1).
-        Spawns on the base launch pad, climbing vertically to safe cruise altitude (Z >= 20m)
-        before transitioning to EN_ROUTE and joining the active formation."""
+        Spawns on the base launch pad as an unenrolled Scout, climbing vertically
+        to safe cruise altitude (Z >= 20m) before transiting to seek and rejoin
+        the active swarm via P2P handshake (RANGE_P2P = 60.0m)."""
         current_max = max((d.id for d in self.drones), default=-1)
         self._highest_drone_id = max(getattr(self, "_highest_drone_id", -1), current_max) + 1
         new_id = self._highest_drone_id
@@ -1610,36 +1689,46 @@ class SITLWorldEngine:
         )
         drone.flight_state = "TAKEOFF"
         drone.status = "ACTIVE"
+        drone.enrolled = False
+        drone.enrollment_status = "SCOUT"
         drone.vel = np.zeros(3, dtype=float)
         drone.acc = np.zeros(3, dtype=float)
         drone.rotor_rpm = 5200.0
 
-        # Prime LKP and heartbeat timestamp with current leader position if in comms range
         current_leader = self.leader
-        if current_leader is not None:
+        if rejoin_target is not None:
+            drone.rejoin_target = np.array(rejoin_target, dtype=float)
+            drone.lkp = np.copy(drone.rejoin_target)
+            drone.last_heartbeat_time = self.sim_time
+            drone.lost_link = False
+        elif current_leader is not None and not current_leader.crashed:
             dist_to_leader = float(np.linalg.norm(spawn_pos - current_leader.pos))
-            if dist_to_leader <= RADIO_RANGE:
+            # If within GCS Howl (140m), GCS downlinks fleet target coordinates to scout
+            if dist_to_leader <= RANGE_HOWL:
                 drone.lkp = np.copy(current_leader.pos)
+                drone.rejoin_target = np.copy(self.get_acknowledged_target())
                 drone.last_heartbeat_time = self.sim_time
                 drone.lost_link = False
             else:
                 # Leader is outside radio range of base pad: muster at local base station (TKT-41 & FIX-04)
                 drone.lkp = np.array([0.0, 0.0, 20.0], dtype=float)
+                drone.rejoin_target = np.array([0.0, 0.0, 20.0], dtype=float)
                 drone.last_heartbeat_time = -100.0  # Timed out from start
                 drone.lost_link = True
                 drone.status = "LOST_LINK"
         else:
             drone.lkp = np.array([0.0, 0.0, 20.0], dtype=float)
+            drone.rejoin_target = np.array([0.0, 0.0, 20.0], dtype=float)
             drone.last_heartbeat_time = -100.0
             drone.lost_link = True
             drone.status = "LOST_LINK"
 
         self.drones.append(drone)
 
-        # Register with active Gossip brain if needed
-        if hasattr(self.brain, "peer_states"):
-            if hasattr(self.brain, "_get_peer_state"):
-                self.brain._get_peer_state(new_id)
+        # Do NOT register as an active peer in Gossip yet; enrollment occurs on P2P handshake!
+        if hasattr(self.brain, "peer_states") and hasattr(self.brain, "_get_peer_state"):
+            p_state = self.brain._get_peer_state(new_id)
+            p_state.gossip_status = "SCOUT"
 
         return drone
 

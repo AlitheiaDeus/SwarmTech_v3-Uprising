@@ -779,14 +779,14 @@
             card.el.classList.add('takeoff-card');
             card.elStatus.textContent = 'TAKEOFF';
             card.elStatus.className = 'status-tag tag-takeoff';
-            card.elRole.textContent = 'REINFORCE';
+            card.elRole.textContent = (drone.enrolled === false) ? 'SCOUT TAKEOFF' : 'REINFORCE';
             if (card.elLandBtn) card.elLandBtn.style.display = 'none';
             setActionBtn('KILL', 'card-btn-action btn-kill');
         } else if (drone.flight_state === 'EN_ROUTE') {
             card.el.classList.add('enroute-card');
-            card.elStatus.textContent = 'EN ROUTE';
+            card.elStatus.textContent = (drone.enrolled === false) ? 'SCOUT REJOIN' : 'EN ROUTE';
             card.elStatus.className = 'status-tag tag-enroute';
-            card.elRole.textContent = `TIER-${drone.tier}`;
+            card.elRole.textContent = (drone.enrolled === false) ? 'SCOUT' : `TIER-${drone.tier}`;
             if (card.elLandBtn) {
                 card.elLandBtn.style.display = 'inline-block';
                 card.elLandBtn.textContent = 'LAND';

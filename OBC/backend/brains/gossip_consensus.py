@@ -131,7 +131,7 @@ class GossipConsensusBrain(BaseBrain):
 
         active_drones = [
             d for d in self.sim.drones
-            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING")
+            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING") and getattr(d, "enrolled", True)
         ]
         living_count = len(active_drones)
         if living_count == 0:
@@ -150,11 +150,13 @@ class GossipConsensusBrain(BaseBrain):
                 "echo_target": np.copy(state.pending_target),
             }
 
-        # Compute RSSI & Link Quality for each drone based on proximity to nearest peer or GCS anchor
-        for drone in active_drones:
+        # Compute RSSI & Link Quality for all airborne drones based on proximity to nearest peer or GCS anchor
+        for drone in self.sim.drones:
+            if drone.crashed or drone.flight_state in ("LANDED", "DESCENDING"):
+                continue
             distances = [float(np.linalg.norm(drone.pos - self.sim.tether_anchor))]
-            for peer in active_drones:
-                if peer.id != drone.id:
+            for peer in self.sim.drones:
+                if peer.id != drone.id and not peer.crashed and peer.flight_state not in ("LANDED", "DESCENDING"):
                     distances.append(float(np.linalg.norm(drone.pos - peer.pos)))
             min_dist = min(distances) if distances else 0.0
             drone.rssi, drone.link_quality = self.sim.calculate_rssi(min_dist, is_hardline=False)
@@ -217,9 +219,32 @@ class GossipConsensusBrain(BaseBrain):
         1. Mission Arrival Steering toward consensus geometric slot offset.
         2. Local Flocking Cohesion & Alignment with nearby peers."""
         accs = {d.id: np.zeros(3, dtype=float) for d in self.sim.drones}
+
+        # Guidance for unenrolled solo scouts (TKT-50)
+        unenrolled_drones = [
+            d for d in self.sim.drones
+            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING") and not getattr(d, "enrolled", True)
+        ]
+        for scout in unenrolled_drones:
+            if getattr(scout, "lost_link", False):
+                scout.target_station = scout.lkp
+                accs[scout.id] = self._steer_toward(
+                    scout.pos, scout.vel, scout.lkp, max_speed=V_LKP
+                )
+            elif scout.rejoin_target is not None:
+                scout.target_station = scout.rejoin_target
+                accs[scout.id] = self._steer_toward(
+                    scout.pos, scout.vel, scout.rejoin_target, max_speed=V_CRUISE
+                )
+            else:
+                scout.target_station = scout.pos
+                accs[scout.id] = self._steer_toward(
+                    scout.pos, scout.vel, scout.pos, max_speed=0.0
+                )
+
         active_drones = [
             d for d in self.sim.drones
-            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING")
+            if not d.crashed and d.flight_state not in ("LANDED", "DESCENDING") and getattr(d, "enrolled", True)
         ]
         living_count = len(active_drones)
         if living_count == 0:
@@ -320,8 +345,13 @@ class GossipConsensusBrain(BaseBrain):
                 drone.target_station = slot_pos
 
                 # 1. Target Pursuit: Arrive steering toward decentralized geometric slot
+                target_speed = V_CRUISE
+                if getattr(drone, "enrollment_timer", 0.0) > 0.0:
+                    ramp = max(0.0, min(1.0, 1.0 - (drone.enrollment_timer / 2.5)))
+                    target_speed = 7.0 + (V_CRUISE - 7.0) * ramp
+
                 target_acc = self._steer_toward(
-                    drone.pos, drone.vel, slot_pos, max_speed=V_CRUISE
+                    drone.pos, drone.vel, slot_pos, max_speed=target_speed
                 )
 
                 # 2. Local Flocking Alignment (match velocity of peers within 15m)

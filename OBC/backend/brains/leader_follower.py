@@ -122,7 +122,7 @@ class LeaderFollowerBrain(BaseBrain):
                                 # Formation Stabilization Gate: verify living escorts are settled near slots (<= 4.0m)
                                 living_escorts = [
                                     f for f in self.sim.drones
-                                    if not f.crashed and not f.is_leader and f.flight_state == "CRUISE" and not f.lost_link
+                                    if not f.crashed and not f.is_leader and f.flight_state == "CRUISE" and not f.lost_link and getattr(f, "enrolled", True)
                                 ]
                                 escorts_settled = True
                                 for f in living_escorts:
@@ -165,6 +165,25 @@ class LeaderFollowerBrain(BaseBrain):
                 accs[drone.id] = self._steer_toward(
                     drone.pos, drone.vel, target_dest, max_speed=leader_speed
                 )
+                continue
+
+            # 1b. Unenrolled solo scout guidance (TKT-50)
+            if not getattr(drone, "enrolled", True):
+                if drone.lost_link:
+                    drone.target_station = drone.lkp
+                    accs[drone.id] = self._steer_toward(
+                        drone.pos, drone.vel, drone.lkp, max_speed=V_LKP
+                    )
+                elif drone.rejoin_target is not None:
+                    drone.target_station = drone.rejoin_target
+                    accs[drone.id] = self._steer_toward(
+                        drone.pos, drone.vel, drone.rejoin_target, max_speed=V_CRUISE
+                    )
+                else:
+                    drone.target_station = drone.pos
+                    accs[drone.id] = self._steer_toward(
+                        drone.pos, drone.vel, drone.pos, max_speed=0.0
+                    )
                 continue
 
             # 2. Lost-link guidance: autonomous navigation toward LKP
@@ -254,8 +273,12 @@ class LeaderFollowerBrain(BaseBrain):
                 else:
                     slot_pos = self._get_formation_slot(drone, current_leader)
                     drone.target_station = slot_pos
+                    target_speed = V_CRUISE
+                    if getattr(drone, "enrollment_timer", 0.0) > 0.0:
+                        ramp = max(0.0, min(1.0, 1.0 - (drone.enrollment_timer / 2.5)))
+                        target_speed = 7.0 + (V_CRUISE - 7.0) * ramp
                     accs[drone.id] = self._steer_toward(
-                        drone.pos, drone.vel, slot_pos, max_speed=V_CRUISE
+                        drone.pos, drone.vel, slot_pos, max_speed=target_speed
                     )
             else:
                 accs[drone.id] = -drone.vel * 2.0
@@ -310,7 +333,7 @@ class LeaderFollowerBrain(BaseBrain):
     def _get_formation_slot(self, drone: Drone, leader: Drone) -> np.ndarray:
         living_followers = [
             d for d in self.sim.drones
-            if not d.crashed and not d.is_leader and d.flight_state not in ("LANDED", "DESCENDING")
+            if not d.crashed and not d.is_leader and d.flight_state not in ("LANDED", "DESCENDING") and getattr(d, "enrolled", True)
         ]
         living_ids = {d.id for d in living_followers}
 

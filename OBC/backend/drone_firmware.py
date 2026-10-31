@@ -95,6 +95,12 @@ class Drone:
         self.wp_loiter_timer: float = 0.0
         self.wp_loitering: bool = False
 
+        # Dynamic Swarm Enrollment & Solo Scout Rejoin (TKT-50)
+        self.enrolled: bool = True
+        self.enrollment_status: str = "ENROLLED"  # "ENROLLED", "SCOUT", "REJOINING"
+        self.enrollment_timer: float = 0.0
+        self.rejoin_target: Optional[np.ndarray] = None
+
     def reset_state(
         self,
         pos: np.ndarray,
@@ -143,6 +149,10 @@ class Drone:
         self.mission_loop = True
         self.wp_loiter_timer = 0.0
         self.wp_loitering = False
+        self.enrolled = True
+        self.enrollment_status = "ENROLLED"
+        self.enrollment_timer = 0.0
+        self.rejoin_target = None
 
     @property
     def target_reached(self) -> bool:
@@ -193,4 +203,8 @@ class Drone:
             "wp_loiter_timer": round(float(self.wp_loiter_timer), 2),
             "wp_loitering": self.wp_loitering,
             "target_reached": self.target_reached,
+            "enrolled": self.enrolled,
+            "enrollment_status": self.enrollment_status,
+            "enrollment_timer": round(float(self.enrollment_timer), 2),
+            "rejoin_target": [round(float(v), 2) for v in self.rejoin_target] if self.rejoin_target is not None else None,
         }
